@@ -1,0 +1,930 @@
+<Window x:Class="FileSorter.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:FileSorter.ViewModels"
+        xmlns:conv="clr-namespace:FileSorter.Converters"
+        xmlns:controls="clr-namespace:FileSorter.Controls"
+        xmlns:models="clr-namespace:FileSorter.Models"
+        Title="FileSorter - Easy File Organizer"
+        Width="1200" Height="750"
+        MinWidth="1000" MinHeight="650"
+        WindowStartupLocation="CenterScreen"
+        WindowStyle="None"
+        ResizeMode="CanResizeWithGrip"
+        Background="{StaticResource PrimaryBackgroundBrush}">
+
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="0"
+                      ResizeBorderThickness="6"
+                      GlassFrameThickness="0"
+                      UseAeroCaptionButtons="False" />
+    </WindowChrome.WindowChrome>
+
+    <Window.Resources>
+        <conv:BoolToVisibilityConverter x:Key="BoolToVis" />
+        <conv:InverseBoolToVisibilityConverter x:Key="InvBoolToVis" />
+        <conv:InverseBoolConverter x:Key="InverseBool" />
+        <conv:OrganizeMethodToStringConverter x:Key="MethodToString" />
+        <conv:BoolToFolderIconConverter x:Key="BoolToFolderIcon" />
+        <conv:BoolToFontWeightConverter x:Key="BoolToFontWeight" />
+        <conv:BoolToColorConverter x:Key="BoolToColor" />
+        <conv:ColorToBrushConverter x:Key="ColorToBrush" />
+        <conv:MethodMatchConverter x:Key="MethodMatch" />
+        <conv:TimestampToRelativeConverter x:Key="TimestampToRelative" />
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- ==================== TOP BAR (draggable) ==================== -->
+        <Border Grid.Row="0" Background="{StaticResource AccentBrush}" Padding="0,14"
+                MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+            <Grid>
+                <TextBlock Text="Easy File Organizer"
+                           FontSize="15" FontWeight="SemiBold"
+                           Foreground="White" HorizontalAlignment="Center"
+                           VerticalAlignment="Center" />
+
+                <!-- Window control buttons -->
+                <StackPanel Orientation="Horizontal"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Top"
+                            Margin="0,-6,4,0">
+                    <Button Style="{StaticResource IconButton}"
+                            Command="{Binding ToggleThemeCommand}"
+                            Content="&#xE706;" FontFamily="Segoe MDL2 Assets"
+                            FontSize="12" Foreground="White" Padding="10,6"
+                            ToolTip="Toggle Theme" />
+                    <Button Style="{StaticResource IconButton}"
+                            Click="MinimizeButton_Click"
+                            Content="&#xE949;" FontFamily="Segoe MDL2 Assets"
+                            FontSize="10" Foreground="White" Padding="10,6"
+                            ToolTip="Minimize" />
+                    <Button Style="{StaticResource IconButton}"
+                            Click="MaximizeButton_Click"
+                            Content="&#xE739;" FontFamily="Segoe MDL2 Assets"
+                            FontSize="10" Foreground="White" Padding="10,6"
+                            ToolTip="Maximize" />
+                    <Button Click="CloseButton_Click"
+                            Content="&#xE106;" FontFamily="Segoe MDL2 Assets"
+                            FontSize="10" Foreground="White" Padding="10,6"
+                            ToolTip="Close">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource IconButton}">
+                                <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background">
+                                            <Setter.Value>
+                                                <SolidColorBrush Color="#E81123" />
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ==================== MAIN 3-COLUMN LAYOUT ==================== -->
+        <Grid Grid.Row="1" Margin="12,12,12,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="310" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="300" />
+            </Grid.ColumnDefinitions>
+
+            <!-- ========== LEFT PANEL: FOLDERS + RULES ========== -->
+            <Grid Grid.Column="0" Margin="0,0,8,0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="8" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <!-- ===== TOP HALF: FOLDERS ===== -->
+                <Border Grid.Row="0" Style="{StaticResource Card}">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel>
+                            <!-- Add Folder Button -->
+                            <Button Style="{StaticResource SecondaryButton}"
+                                    Command="{Binding AddFolderCommand}"
+                                    HorizontalAlignment="Stretch"
+                                    Margin="0,0,0,12">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets"
+                                               FontSize="14" VerticalAlignment="Center"
+                                               Margin="0,0,6,0" />
+                                    <TextBlock Text="ADD FOLDER" FontFamily="Segoe UI"
+                                               FontSize="13" FontWeight="SemiBold"
+                                               VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+
+                            <!-- Current Folder -->
+                            <TextBlock Text="Current"
+                                       Foreground="{StaticResource SecondaryTextBrush}"
+                                       FontSize="12" FontWeight="SemiBold"
+                                       Margin="0,0,0,6" />
+
+                            <Border Background="{StaticResource TertiaryBackgroundBrush}"
+                                    CornerRadius="6" Padding="10,8" Margin="0,0,0,12"
+                                    Visibility="{Binding HasSourceFolder, Converter={StaticResource BoolToVis}}"
+                                    ToolTip="{Binding SourceFolder}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <TextBlock Grid.Column="0"
+                                               Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets"
+                                               FontSize="16" Foreground="{StaticResource AccentBrush}"
+                                               VerticalAlignment="Center" Margin="0,0,8,0" />
+                                    <TextBlock Grid.Column="1"
+                                               Text="{Binding CurrentFolderName}"
+                                               FontSize="13" FontWeight="SemiBold"
+                                               Foreground="{StaticResource PrimaryTextBrush}"
+                                               VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Grid.Column="2"
+                                               Text="{Binding CurrentFolderFileCount}"
+                                               FontSize="12"
+                                               Foreground="{StaticResource SecondaryTextBrush}"
+                                               VerticalAlignment="Center"
+                                               Margin="8,0,0,0" />
+                                </Grid>
+                            </Border>
+
+                            <TextBlock Text="No folder selected"
+                                       Foreground="{StaticResource SecondaryTextBrush}"
+                                       FontSize="12" FontStyle="Italic"
+                                       Margin="4,0,0,12"
+                                       Visibility="{Binding HasSourceFolder, Converter={StaticResource InvBoolToVis}}" />
+
+                            <!-- Recent Folders -->
+                            <TextBlock Text="Recent"
+                                       Foreground="{StaticResource SecondaryTextBrush}"
+                                       FontSize="12" FontWeight="SemiBold"
+                                       Margin="0,0,0,6" />
+
+                            <ItemsControl ItemsSource="{Binding RecentFolders}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="Transparent"
+                                                CornerRadius="6" Padding="10,6" Margin="0,0,0,2"
+                                                Cursor="Hand"
+                                                ToolTip="{Binding FullPath}">
+                                            <Border.InputBindings>
+                                                <MouseBinding MouseAction="LeftClick"
+                                                              Command="{Binding DataContext.SelectRecentFolderCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                              CommandParameter="{Binding}" />
+                                            </Border.InputBindings>
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Style.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter Property="Background" Value="{StaticResource TertiaryBackgroundBrush}" />
+                                                        </Trigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+
+                                                <TextBlock Grid.Column="0"
+                                                           Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets"
+                                                           FontSize="14" Foreground="{StaticResource SecondaryTextBrush}"
+                                                           VerticalAlignment="Center" Margin="0,0,8,0" />
+                                                <TextBlock Grid.Column="1"
+                                                           Text="{Binding Name}"
+                                                           FontSize="13"
+                                                           Foreground="{StaticResource PrimaryTextBrush}"
+                                                           VerticalAlignment="Center"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Grid.Column="2"
+                                                           Text="{Binding FileCount}"
+                                                           FontSize="11"
+                                                           Foreground="{StaticResource SecondaryTextBrush}"
+                                                           VerticalAlignment="Center"
+                                                           Margin="8,0,0,0" />
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <TextBlock Text="No recent folders"
+                                       Foreground="{StaticResource BorderBrush}"
+                                       FontSize="11" FontStyle="Italic"
+                                       Margin="4,4,0,0">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding RecentFolders.Count}" Value="0">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Border>
+
+                <!-- ===== BOTTOM HALF: RULES ===== -->
+                <Border Grid.Row="2" Style="{StaticResource Card}">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel>
+                            <!-- Add Rule Button -->
+                            <Button Style="{StaticResource SecondaryButton}"
+                                    Command="{Binding AddRuleCommand}"
+                                    HorizontalAlignment="Stretch"
+                                    Margin="0,0,0,10">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="+" FontSize="16" FontWeight="Bold"
+                                               VerticalAlignment="Center" Margin="0,0,6,0" />
+                                    <TextBlock Text="Add Rule" FontFamily="Segoe UI"
+                                               VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+
+                            <!-- Apply Rules Toggle -->
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,6" HorizontalAlignment="Center">
+                                <CheckBox Style="{StaticResource ModernCheckBox}"
+                                          IsChecked="{Binding ApplyRules}" />
+                                <TextBlock Text="Apply Rules"
+                                           Foreground="{StaticResource PrimaryTextBrush}"
+                                           FontSize="13" VerticalAlignment="Center"
+                                           Margin="4,0,0,0" />
+                            </StackPanel>
+
+                            <!-- AND / OR Mode -->
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8"
+                                        HorizontalAlignment="Center"
+                                        Visibility="{Binding ApplyRules, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Text="Process Rules as"
+                                           Foreground="{StaticResource SecondaryTextBrush}"
+                                           FontSize="12" VerticalAlignment="Center"
+                                           Margin="0,0,8,0" />
+                                <RadioButton Content="AND"
+                                             IsChecked="{Binding RulesAndMode}"
+                                             Foreground="{StaticResource PrimaryTextBrush}"
+                                             FontSize="12" VerticalAlignment="Center"
+                                             Margin="0,0,10,0" />
+                                <RadioButton Content="OR"
+                                             IsChecked="{Binding RulesOrMode}"
+                                             Foreground="{StaticResource PrimaryTextBrush}"
+                                             FontSize="12" VerticalAlignment="Center" />
+                            </StackPanel>
+
+                            <!-- Rules List -->
+                            <ItemsControl ItemsSource="{Binding Rules}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="{StaticResource TertiaryBackgroundBrush}"
+                                                CornerRadius="6" Padding="8" Margin="0,0,0,6">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+
+                                                <ComboBox Grid.Column="0"
+                                                          ItemsSource="{Binding AvailableFields}"
+                                                          SelectedItem="{Binding Field}"
+                                                          FontSize="11" Padding="4,3"
+                                                          Margin="0,0,4,0"
+                                                          MinWidth="75" />
+
+                                                <ComboBox Grid.Column="1"
+                                                          ItemsSource="{Binding AvailableOperators}"
+                                                          SelectedItem="{Binding Operator}"
+                                                          FontSize="11" Padding="4,3"
+                                                          Margin="0,0,4,0"
+                                                          MinWidth="75" />
+
+                                                <TextBox Grid.Column="2"
+                                                         Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
+                                                         FontSize="12" Padding="6,4"
+                                                         Background="{StaticResource SecondaryBackgroundBrush}"
+                                                         Foreground="{StaticResource PrimaryTextBrush}"
+                                                         BorderBrush="{StaticResource BorderBrush}"
+                                                         BorderThickness="1"
+                                                         Margin="0,0,4,0" />
+
+                                                <Button Grid.Column="3"
+                                                        Style="{StaticResource IconButton}"
+                                                        Command="{Binding RemoveCommand}"
+                                                        Content="&#xE711;"
+                                                        FontFamily="Segoe MDL2 Assets"
+                                                        FontSize="11" Padding="4" />
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <!-- Separator -->
+                            <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,6,0,8" />
+
+                            <!-- Move to / Copy to + Destination -->
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <ComboBox Grid.Column="0" FontSize="12" Padding="6,4"
+                                          Margin="0,0,6,0" MinWidth="80"
+                                          SelectedIndex="{Binding MoveMode, Converter={StaticResource InverseBool}}">
+                                    <ComboBoxItem Content="Move to" />
+                                    <ComboBoxItem Content="Copy to" />
+                                </ComboBox>
+
+                                <Button Grid.Column="1"
+                                        Style="{StaticResource SecondaryButton}"
+                                        Command="{Binding SelectDestinationCommand}"
+                                        Padding="8,4" Margin="0,0,6,0">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE8B7;"
+                                                   FontFamily="Segoe MDL2 Assets"
+                                                   FontSize="12" VerticalAlignment="Center"
+                                                   Margin="0,0,4,0" Foreground="{StaticResource WarningBrush}" />
+                                        <TextBlock Text="{Binding DestinationDisplay}"
+                                                   FontFamily="Segoe UI"
+                                                   FontSize="12" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+
+                                <TextBox Grid.Column="2"
+                                         Text="{Binding DestinationSubfolderPattern, UpdateSourceTrigger=PropertyChanged}"
+                                         FontSize="11" Padding="6,4"
+                                         Background="{StaticResource SecondaryBackgroundBrush}"
+                                         Foreground="{StaticResource SecondaryTextBrush}"
+                                         BorderBrush="{StaticResource BorderBrush}"
+                                         BorderThickness="1"
+                                         ToolTip="Template: #type #ext #year #month #date #datetaken #alpha #size (e.g. #type/#ext)" />
+                            </Grid>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Border>
+            </Grid>
+
+            <!-- ========== CENTER PANEL: CHART + CONTROLS ========== -->
+            <Grid Grid.Column="1" Margin="4,0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="4*" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="3*" />
+                </Grid.RowDefinitions>
+
+                <!-- Method Tabs -->
+                <Border Grid.Row="0" HorizontalAlignment="Center" Margin="0,0,0,4">
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="Type" Margin="2,0"
+                                Command="{Binding SetMethodCommand}"
+                                CommandParameter="{x:Static models:OrganizeMethod.ByType}">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                    <Style.Triggers>
+                                        <DataTrigger Value="True">
+                                            <DataTrigger.Binding>
+                                                <Binding Path="SelectedMethod" Converter="{StaticResource MethodMatch}" ConverterParameter="ByType" />
+                                            </DataTrigger.Binding>
+                                            <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+                                            <Setter Property="Foreground" Value="White" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <Button Content="Extension" Margin="2,0"
+                                Command="{Binding SetMethodCommand}"
+                                CommandParameter="{x:Static models:OrganizeMethod.ByExtension}">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                    <Style.Triggers>
+                                        <DataTrigger Value="True">
+                                            <DataTrigger.Binding>
+                                                <Binding Path="SelectedMethod" Converter="{StaticResource MethodMatch}" ConverterParameter="ByExtension" />
+                                            </DataTrigger.Binding>
+                                            <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+                                            <Setter Property="Foreground" Value="White" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <Button Content="Alphabet" Margin="2,0"
+                                Command="{Binding SetMethodCommand}"
+                                CommandParameter="{x:Static models:OrganizeMethod.ByAlphabet}">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                    <Style.Triggers>
+                                        <DataTrigger Value="True">
+                                            <DataTrigger.Binding>
+                                                <Binding Path="SelectedMethod" Converter="{StaticResource MethodMatch}" ConverterParameter="ByAlphabet" />
+                                            </DataTrigger.Binding>
+                                            <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+                                            <Setter Property="Foreground" Value="White" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <Button Content="Size" Margin="2,0"
+                                Command="{Binding SetMethodCommand}"
+                                CommandParameter="{x:Static models:OrganizeMethod.BySize}">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                    <Style.Triggers>
+                                        <DataTrigger Value="True">
+                                            <DataTrigger.Binding>
+                                                <Binding Path="SelectedMethod" Converter="{StaticResource MethodMatch}" ConverterParameter="BySize" />
+                                            </DataTrigger.Binding>
+                                            <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+                                            <Setter Property="Foreground" Value="White" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <Button Content="Date" Margin="2,0"
+                                Command="{Binding SetMethodCommand}"
+                                CommandParameter="{x:Static models:OrganizeMethod.ByDate}">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                    <Style.Triggers>
+                                        <DataTrigger Value="True">
+                                            <DataTrigger.Binding>
+                                                <Binding Path="SelectedMethod" Converter="{StaticResource MethodMatch}" ConverterParameter="ByDate" />
+                                            </DataTrigger.Binding>
+                                            <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+                                            <Setter Property="Foreground" Value="White" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <Button Content="Photo" Margin="2,0"
+                                Command="{Binding SetMethodCommand}"
+                                CommandParameter="{x:Static models:OrganizeMethod.ByDateTaken}">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                    <Style.Triggers>
+                                        <DataTrigger Value="True">
+                                            <DataTrigger.Binding>
+                                                <Binding Path="SelectedMethod" Converter="{StaticResource MethodMatch}" ConverterParameter="ByDateTaken" />
+                                            </DataTrigger.Binding>
+                                            <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+                                            <Setter Property="Foreground" Value="White" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                    </StackPanel>
+                </Border>
+
+                <!-- Date granularity sub-panel (visible when Date or Photo selected) -->
+                <Border Grid.Row="1" HorizontalAlignment="Center" Margin="0,2,0,2"
+                        Visibility="{Binding ShowDatePanel, Converter={StaticResource BoolToVis}}">
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="Year" Margin="2,0"
+                                Command="{Binding SetDateGranularityCommand}"
+                                CommandParameter="{x:Static models:DateGranularity.Year}">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                    <Setter Property="Padding" Value="12,4" />
+                                    <Setter Property="FontSize" Value="12" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SelectedDateGranularity}" Value="Year">
+                                            <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+                                            <Setter Property="Foreground" Value="White" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <Button Content="Month" Margin="2,0"
+                                Command="{Binding SetDateGranularityCommand}"
+                                CommandParameter="{x:Static models:DateGranularity.Month}">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                    <Setter Property="Padding" Value="12,4" />
+                                    <Setter Property="FontSize" Value="12" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SelectedDateGranularity}" Value="Month">
+                                            <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+                                            <Setter Property="Foreground" Value="White" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <Button Content="Date" Margin="2,0"
+                                Command="{Binding SetDateGranularityCommand}"
+                                CommandParameter="{x:Static models:DateGranularity.Day}">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                    <Setter Property="Padding" Value="12,4" />
+                                    <Setter Property="FontSize" Value="12" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SelectedDateGranularity}" Value="Day">
+                                            <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+                                            <Setter Property="Foreground" Value="White" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                    </StackPanel>
+                </Border>
+
+                <!-- Type count badge -->
+                <Border Grid.Row="1" HorizontalAlignment="Center"
+                        Background="{StaticResource TertiaryBackgroundBrush}"
+                        CornerRadius="10" Padding="12,4" Margin="0,2,0,6"
+                        Visibility="{Binding ShowDatePanel, Converter={StaticResource InvBoolToVis}}">
+                    <TextBlock Text="{Binding TypeCountText}"
+                               Foreground="{StaticResource AccentBrush}"
+                               FontSize="12" FontWeight="SemiBold" />
+                </Border>
+
+                <!-- Donut Chart -->
+                <controls:DonutChart Grid.Row="2"
+                                     Items="{Binding CategoryStatsItems}"
+                                     TotalText="{Binding TotalFiles}"
+                                     SubText="TOTAL ITEMS"
+                                     RulesActiveText="{Binding RulesActiveText}"
+                                     Margin="20"
+                                     MinHeight="200" />
+
+                <!-- Checkboxes row -->
+                <StackPanel Grid.Row="3" Orientation="Horizontal"
+                            HorizontalAlignment="Center" Margin="0,4,0,8">
+                    <CheckBox Style="{StaticResource ModernCheckBox}"
+                              IsChecked="{Binding IncludeSubfolders}"
+                              Content="subfolders" FontSize="11" Margin="0,0,12,0" />
+                    <CheckBox Style="{StaticResource ModernCheckBox}"
+                              IsChecked="{Binding ApplyFilters}"
+                              Content="filters" FontSize="11" Margin="0,0,12,0" />
+                    <CheckBox Style="{StaticResource ModernCheckBox}"
+                              IsChecked="{Binding ApplyRules}"
+                              Content="rules" FontSize="11" Margin="0,0,12,0" />
+                    <CheckBox Style="{StaticResource ModernCheckBox}"
+                              IsChecked="{Binding MoveMode}"
+                              Content="move" FontSize="11" Margin="0,0,12,0" />
+                    <CheckBox Style="{StaticResource ModernCheckBox}"
+                              IsChecked="{Binding CopyMode}"
+                              Content="copy" FontSize="11" />
+                </StackPanel>
+
+                <!-- Organize / Undo / History Buttons -->
+                <Grid Grid.Row="4" HorizontalAlignment="Center" Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <Button Grid.Column="0"
+                            Style="{StaticResource PrimaryButton}"
+                            Command="{Binding OrganizeCommand}"
+                            Padding="28,10" Margin="0,0,4,0">
+                        <TextBlock Text="Organize" FontSize="14" />
+                    </Button>
+
+                    <Button Grid.Column="1"
+                            Command="{Binding UndoCommand}"
+                            Padding="28,10" Margin="4,0,0,0">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                            </Style>
+                        </Button.Style>
+                        <TextBlock Text="Undo" FontSize="14" />
+                    </Button>
+
+                    <Button Grid.Column="2" x:Name="HistoryButton"
+                            Command="{Binding ToggleHistoryCommand}"
+                            Padding="16,10" Margin="4,0,0,0">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+                            </Style>
+                        </Button.Style>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE81C;" FontFamily="Segoe MDL2 Assets"
+                                       FontSize="12" VerticalAlignment="Center" Margin="0,0,4,0" />
+                            <TextBlock Text="History" FontSize="14" />
+                        </StackPanel>
+                    </Button>
+                </Grid>
+
+                <!-- History Popup -->
+                <Popup IsOpen="{Binding ShowHistory}"
+                       PlacementTarget="{Binding ElementName=HistoryButton}"
+                       Placement="Top" StaysOpen="False"
+                       AllowsTransparency="True">
+                    <Border Background="{StaticResource CardBackgroundBrush}"
+                            BorderBrush="{StaticResource BorderBrush}"
+                            BorderThickness="1" CornerRadius="8"
+                            Padding="12" MinWidth="280" MaxHeight="300">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+
+                            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+                                <TextBlock Text="Organizing History"
+                                           Foreground="{StaticResource PrimaryTextBrush}"
+                                           FontSize="14" FontWeight="SemiBold"
+                                           VerticalAlignment="Center" />
+                                <Button Style="{StaticResource IconButton}"
+                                        Command="{Binding ClearHistoryCommand}"
+                                        Content="&#xE74D;" FontFamily="Segoe MDL2 Assets"
+                                        FontSize="12" Padding="6" Margin="8,0,0,0"
+                                        ToolTip="Clear History" />
+                            </StackPanel>
+
+                            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" MaxHeight="240">
+                                <StackPanel>
+                                    <ItemsControl ItemsSource="{Binding HistoryItems}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Background="{StaticResource TertiaryBackgroundBrush}"
+                                                        CornerRadius="6" Padding="10,8" Margin="0,0,0,4">
+                                                    <StackPanel>
+                                                        <TextBlock Text="{Binding Description}"
+                                                                   Foreground="{StaticResource PrimaryTextBrush}"
+                                                                   FontSize="12" TextWrapping="Wrap" />
+                                                        <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                                            <TextBlock Text="{Binding Timestamp, Converter={StaticResource TimestampToRelative}}"
+                                                                       Foreground="{StaticResource SecondaryTextBrush}"
+                                                                       FontSize="11" />
+                                                            <TextBlock Foreground="{StaticResource SecondaryTextBrush}"
+                                                                       FontSize="11" Margin="8,0,0,0">
+                                                                <Run Text="{Binding Moves.Count, Mode=OneWay}" />
+                                                                <Run Text="files" />
+                                                            </TextBlock>
+                                                        </StackPanel>
+                                                    </StackPanel>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+
+                                    <TextBlock Text="No history yet"
+                                               Foreground="{StaticResource SecondaryTextBrush}"
+                                               FontSize="12" FontStyle="Italic"
+                                               HorizontalAlignment="Center" Margin="0,8">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding HistoryItems.Count}" Value="0">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Grid>
+                    </Border>
+                </Popup>
+
+                <!-- Destination label -->
+                <TextBlock Grid.Row="5"
+                           HorizontalAlignment="Center"
+                           FontSize="12" Margin="0,0,0,6"
+                           Foreground="{StaticResource SecondaryTextBrush}">
+                    <Run Text="Destination" />
+                    <Run Text=" &#x2192; " />
+                    <Run Text="{Binding DestinationDisplay, Mode=OneWay}" />
+                </TextBlock>
+
+                <!-- Category Legend / Stats (clickable to toggle) -->
+                <ScrollViewer Grid.Row="6" VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              Margin="0,0,0,4">
+                <ItemsControl ItemsSource="{Binding CategoryStatsItems}"
+                              HorizontalAlignment="Center"
+                              VerticalAlignment="Top">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <UniformGrid Columns="2" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="Transparent" Cursor="Hand"
+                                    CornerRadius="4" Padding="4,2" Margin="0,1">
+                                <Border.InputBindings>
+                                    <MouseBinding MouseAction="LeftClick"
+                                                  Command="{Binding DataContext.ToggleCategoryCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                  CommandParameter="{Binding Name}" />
+                                </Border.InputBindings>
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Style.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter Property="Background" Value="{StaticResource TertiaryBackgroundBrush}" />
+                                            </Trigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <Grid MinWidth="140">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="14" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.Style>
+                                        <Style TargetType="Grid">
+                                            <Setter Property="Opacity" Value="1.0" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsSelected}" Value="False">
+                                                    <Setter Property="Opacity" Value="0.35" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Grid.Style>
+
+                                    <Border Grid.Column="0" Width="10" Height="10" CornerRadius="2"
+                                            VerticalAlignment="Center">
+                                        <Border.Background>
+                                            <SolidColorBrush Color="{Binding Color}" />
+                                        </Border.Background>
+                                    </Border>
+
+                                    <TextBlock Grid.Column="1"
+                                               Text="{Binding Name}"
+                                               Foreground="{StaticResource PrimaryTextBrush}"
+                                               FontSize="12" FontWeight="SemiBold"
+                                               VerticalAlignment="Center"
+                                               Margin="6,0,12,0" />
+
+                                    <TextBlock Grid.Column="2"
+                                               Text="{Binding Count}"
+                                               Foreground="{StaticResource SecondaryTextBrush}"
+                                               FontSize="12"
+                                               VerticalAlignment="Center" />
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                </ScrollViewer>
+            </Grid>
+
+            <!-- ========== RIGHT PANEL: PREVIEW TREE ========== -->
+            <Border Grid.Column="2" Style="{StaticResource Card}" Margin="8,0,0,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <!-- Destination folder selector -->
+                    <Button Grid.Row="0"
+                            Style="{StaticResource SecondaryButton}"
+                            Command="{Binding SelectDestinationCommand}"
+                            HorizontalAlignment="Stretch"
+                            Margin="0,0,0,8">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                            <TextBlock Text="&#xE8B7;"
+                                       FontFamily="Segoe MDL2 Assets"
+                                       FontSize="14" VerticalAlignment="Center"
+                                       Margin="0,0,6,0"
+                                       Foreground="{StaticResource WarningBrush}" />
+                            <TextBlock Text="DESTINATION" FontFamily="Segoe UI"
+                                       FontSize="13" FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+
+                    <!-- Destination path display -->
+                    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10"
+                                ToolTip="{Binding DestinationFolder}">
+                        <Border Width="12" Height="12" CornerRadius="2"
+                                Background="{StaticResource AccentBrush}"
+                                VerticalAlignment="Center" Margin="0,0,6,0" />
+                        <TextBlock Foreground="{StaticResource SecondaryTextBrush}" FontSize="12"
+                                   VerticalAlignment="Center">
+                            <Run Text="Destination" />
+                            <Run Text=" &#x2192; " />
+                            <Run Text="{Binding DestinationDisplay, Mode=OneWay}" />
+                        </TextBlock>
+                    </StackPanel>
+
+                    <!-- Tree View -->
+                    <TreeView Grid.Row="2"
+                              ItemsSource="{Binding PreviewItems}"
+                              Style="{StaticResource ModernTreeView}"
+                              ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                        <TreeView.ItemContainerStyle>
+                            <Style TargetType="TreeViewItem">
+                                <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+                                <Setter Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
+                                <Style.Resources>
+                                    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="Transparent" />
+                                    <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="Transparent" />
+                                    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="{StaticResource PrimaryTextColor}" />
+                                    <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}" Color="{StaticResource PrimaryTextColor}" />
+                                </Style.Resources>
+                            </Style>
+                        </TreeView.ItemContainerStyle>
+                        <TreeView.ItemTemplate>
+                            <HierarchicalDataTemplate ItemsSource="{Binding Children}">
+                                <StackPanel Orientation="Horizontal" Margin="2,3">
+                                    <TextBlock Text="{Binding IsFolder, Converter={StaticResource BoolToFolderIcon}}"
+                                               FontFamily="Segoe MDL2 Assets"
+                                               FontSize="14"
+                                               Foreground="{Binding IsFolder, Converter={StaticResource BoolToColor}}"
+                                               VerticalAlignment="Center"
+                                               Margin="0,0,6,0" />
+                                    <TextBlock Text="{Binding Name}"
+                                               FontWeight="{Binding IsFolder, Converter={StaticResource BoolToFontWeight}}"
+                                               Foreground="{StaticResource PrimaryTextBrush}"
+                                               VerticalAlignment="Center"
+                                               FontSize="13" />
+                                </StackPanel>
+                            </HierarchicalDataTemplate>
+                        </TreeView.ItemTemplate>
+                    </TreeView>
+
+                    <!-- Organize button (right panel) -->
+                    <Button Grid.Row="3"
+                            Style="{StaticResource SecondaryButton}"
+                            Command="{Binding OrganizeCommand}"
+                            HorizontalAlignment="Right"
+                            Margin="0,10,0,0"
+                            Padding="20,8"
+                            BorderBrush="{StaticResource AccentBrush}">
+                        <TextBlock Text="Organize" FontSize="13" />
+                    </Button>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- ==================== STATUS BAR ==================== -->
+        <Border Grid.Row="2"
+                Background="{StaticResource SecondaryBackgroundBrush}"
+                Padding="20,6">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0"
+                           Text="{Binding StatusText}"
+                           FontSize="12"
+                           Foreground="{StaticResource SecondaryTextBrush}"
+                           VerticalAlignment="Center" />
+
+                <ProgressBar Grid.Column="1"
+                             Style="{StaticResource ModernProgressBar}"
+                             Value="{Binding Progress}"
+                             Maximum="100"
+                             VerticalAlignment="Center"
+                             Margin="16,0"
+                             Visibility="{Binding IsOrganizing, Converter={StaticResource BoolToVis}}" />
+
+                <TextBlock Grid.Column="2"
+                           Text="{Binding SourceFolder}"
+                           FontSize="11"
+                           Foreground="{StaticResource BorderBrush}"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"
+                           MaxWidth="300" />
+            </Grid>
+        </Border>
+    </Grid>
+</Window>
