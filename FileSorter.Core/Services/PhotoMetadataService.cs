@@ -1,5 +1,5 @@
-using System.IO;
-using System.Windows.Media.Imaging;
+using MetadataExtractor;
+using MetadataExtractor.Formats.Exif;
 
 namespace FileSorter.Services;
 
@@ -17,10 +17,13 @@ public static class PhotoMetadataService
     {
         try
         {
-            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            var frame = BitmapFrame.Create(fs, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None);
-            if (frame.Metadata is BitmapMetadata meta && meta.DateTaken is string dateStr
-                && DateTime.TryParse(dateStr, out var dt))
+            var directories = ImageMetadataReader.ReadMetadata(path);
+            var subIfd = directories.OfType<ExifSubIfdDirectory>().FirstOrDefault();
+            if (subIfd != null && subIfd.TryGetDateTime(ExifDirectoryBase.TagDateTimeOriginal, out var dt))
+                return dt;
+
+            var ifd0 = directories.OfType<ExifIfd0Directory>().FirstOrDefault();
+            if (ifd0 != null && ifd0.TryGetDateTime(ExifDirectoryBase.TagDateTime, out dt))
                 return dt;
         }
         catch { }

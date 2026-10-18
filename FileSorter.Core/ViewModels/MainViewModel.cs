@@ -1,17 +1,21 @@
 using System.Collections.ObjectModel;
-using System.IO;
-using System.Windows;
+using System.ComponentModel;
 using System.Windows.Input;
-using System.Windows.Media;
+using FileSorter.Abstractions;
 using FileSorter.Models;
 using FileSorter.Services;
-using Microsoft.Win32;
 
 namespace FileSorter.ViewModels;
 
 public class MainViewModel : ObservableObject
 {
+    private const int ThumbnailSize = 48;
+
     private readonly FileOrganizerService _organizer = new();
+    private readonly IUiDispatcher _dispatcher;
+    private readonly IDialogService _dialogs;
+    private readonly IThumbnailProvider _thumbnails;
+    private readonly IThemeService _theme;
     private CancellationTokenSource? _scanCts;
     private bool _isScanning;
 
@@ -35,20 +39,23 @@ public class MainViewModel : ObservableObject
     private bool _isDarkTheme = true;
     private bool _showHistory;
     private DateGranularity _selectedDateGranularity = DateGranularity.Month;
+    private FileViewMode _selectedViewMode = FileViewMode.Tree;
+    private bool _skipDuplicates;
+    private bool _throttlePending;
 
     // Colors for categories
-    private static readonly Color[] CategoryColors =
+    private static readonly RgbColor[] CategoryColors =
     [
-        Color.FromRgb(100, 149, 237),  // Application - cornflower blue
-        Color.FromRgb(186, 130, 230),  // Archive - purple
-        Color.FromRgb(240, 98, 98),    // Documents - red/pink
-        Color.FromRgb(245, 158, 115),  // Movies - salmon
-        Color.FromRgb(255, 183, 77),   // Music - orange
-        Color.FromRgb(220, 220, 90),   // Photos - yellow
-        Color.FromRgb(102, 187, 106),  // Text/Code - green
-        Color.FromRgb(120, 180, 220),  // Executables - light blue
-        Color.FromRgb(158, 158, 158),  // Fonts - gray
-        Color.FromRgb(130, 130, 150),  // Other - dim
+        new RgbColor(100, 149, 237),  // Application - cornflower blue
+        new RgbColor(186, 130, 230),  // Archive - purple
+        new RgbColor(240, 98, 98),    // Documents - red/pink
+        new RgbColor(245, 158, 115),  // Movies - salmon
+        new RgbColor(255, 183, 77),   // Music - orange
+        new RgbColor(220, 220, 90),   // Photos - yellow
+        new RgbColor(102, 187, 106),  // Text/Code - green
+        new RgbColor(120, 180, 220),  // Executables - light blue
+        new RgbColor(158, 158, 158),  // Fonts - gray
+        new RgbColor(130, 130, 150),  // Other - dim
     ];
 
     public string SourceFolder
@@ -171,6 +178,12 @@ public class MainViewModel : ObservableObject
         }
     }
 
+    public bool SkipDuplicates
+    {
+        get => _skipDuplicates;
+        set => SetProperty(ref _skipDuplicates, value);
+    }
+
     public bool RulesAndMode
     {
         get => _rulesAndMode;
@@ -239,7 +252,7 @@ public class MainViewModel : ObservableObject
         _ => $"{CategoryStatsItems.Count} Groups"
     };
 
-    public bool CanUndo => _organizer.CanUndo;
+    public bool CanUndo => _organizer.LastUndoableOperation != null;
 
     public bool IsDarkTheme
     {
@@ -265,16 +278,40 @@ public class MainViewModel : ObservableObject
 
     public bool ShowDatePanel => SelectedMethod is OrganizeMethod.ByDate or OrganizeMethod.ByDateTaken;
 
+    public FileViewMode SelectedViewMode
+    {
+        get => _selectedViewMode;
+        set
+        {
+            if (SetProperty(ref _selectedViewMode, value))
+            {
+                OnPropertyChanged(nameof(IsTreeView));
+                OnPropertyChanged(nameof(IsIconsView));
+                OnPropertyChanged(nameof(IsListView));
+                OnPropertyChanged(nameof(IsDetailsView));
+                OnPropertyChanged(nameof(IsNonTreeView));
+            }
+        }
+    }
+
+    public bool IsTreeView => SelectedViewMode == FileViewMode.Tree;
+    public bool IsIconsView => SelectedViewMode == FileViewMode.Icons;
+    public bool IsListView => SelectedViewMode == FileViewMode.List;
+    public bool IsDetailsView => SelectedViewMode == FileViewMode.Details;
+    public bool IsNonTreeView => SelectedViewMode != FileViewMode.Tree;
+
     public ObservableCollection<CategoryViewModel> Categories { get; } = [];
     public ObservableCollection<PreviewItem> PreviewItems { get; } = [];
     public ObservableCollection<CategoryStats> CategoryStatsItems { get; } = [];
+    public ObservableCollection<ViewFileGroup> ViewFileGroups { get; } = [];
+    public IReadOnlyList<ViewFileItem> FlatViewItems { get; private set; } = [];
     public ObservableCollection<FilterRuleViewModel> Rules { get; } = [];
     public ObservableCollection<OrganizeOperation> HistoryItems { get; } = [];
 
     public ICommand AddFolderCommand { get; }
     public ICommand SelectDestinationCommand { get; }
-    public ICommand OrganizeCommand { get; }
-    public ICommand UndoCommand { get; }
+    public AsyncRelayCommand OrganizeCommand { get; }
+    public AsyncRelayCommand UndoCommand { get; }
     public ICommand AddRuleCommand { get; }
     public ICommand SetMethodCommand { get; }
     public ICommand SelectRecentFolderCommand { get; }
@@ -284,16 +321,33 @@ public class MainViewModel : ObservableObject
     public ICommand CloseDatePanelCommand { get; }
     public ICommand ToggleThemeCommand { get; }
     public ICommand ToggleHistoryCommand { get; }
-    public ICommand ClearHistoryCommand { get; }
+    public AsyncRelayCommand ClearHistoryCommand { get; }
+    public ICommand SetViewModeCommand { get; }
+    public ICommand OpenFileCommand { get; }
+    public ICommand ExpandAllPreviewCommand { get; }
+    public ICommand CollapseAllPreviewCommand { get; }
+    public ICommand ExpandAllViewCommand { get; }
+    public ICommand CollapseAllViewCommand { get; }
+    public ICommand ToggleViewGroupCommand { get; }
+    public AsyncRelayCommand UndoOperationCommand { get; }
 
     private List<FileItem> _scannedFiles = [];
 
-    public MainViewModel()
+    public MainViewModel(IUiDispatcher dispatcher, IDialogService dialogs,
+        IThumbnailProvider thumbnails, IThemeService theme)
     {
+        _dispatcher = dispatcher;
+        _dialogs = dialogs;
+        _thumbnails = thumbnails;
+        _theme = theme;
+
         AddFolderCommand = new RelayCommand(_ => SelectSourceFolder());
         SelectDestinationCommand = new RelayCommand(_ => SelectDestinationFolder());
         OrganizeCommand = new AsyncRelayCommand(_ => OrganizeAsync(), _ => CanOrganize());
-        UndoCommand = new AsyncRelayCommand(_ => UndoAsync(), _ => _organizer.CanUndo);
+        UndoCommand = new AsyncRelayCommand(_ => UndoLastAsync(), _ => !IsOrganizing && CanUndo);
+        UndoOperationCommand = new AsyncRelayCommand(
+            p => UndoOperationAsync(p as OrganizeOperation),
+            p => !IsOrganizing && p is OrganizeOperation op && _organizer.CanUndoOperation(op));
         AddRuleCommand = new RelayCommand(_ => AddRule());
         SetMethodCommand = new RelayCommand(p =>
         {
@@ -334,22 +388,75 @@ public class MainViewModel : ObservableObject
         });
         ToggleThemeCommand = new RelayCommand(_ => ToggleTheme());
         ToggleHistoryCommand = new RelayCommand(_ => ShowHistory = !ShowHistory);
-        ClearHistoryCommand = new RelayCommand(_ =>
+        ClearHistoryCommand = new AsyncRelayCommand(async _ =>
         {
-            _organizer.ClearHistory();
-            HistoryItems.Clear();
-            OnPropertyChanged(nameof(CanUndo));
+            await _organizer.ClearHistoryAsync();
+            RefreshHistory();
+        }, _ => !IsOrganizing);
+        SetViewModeCommand = new RelayCommand(p =>
+        {
+            if (p is FileViewMode mode)
+                SelectedViewMode = mode;
         });
+        OpenFileCommand = new RelayCommand(p =>
+        {
+            if (p is string path && System.IO.File.Exists(path))
+            {
+                try
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = path,
+                        UseShellExecute = true
+                    });
+                }
+                catch { }
+            }
+        });
+        ToggleViewGroupCommand = new RelayCommand(p =>
+        {
+            if (p is ViewFileGroup g)
+            {
+                g.IsExpanded = !g.IsExpanded;
+                RebuildFlatViewItems();
+            }
+        });
+        ExpandAllPreviewCommand = new RelayCommand(_ => SetPreviewExpanded(true));
+        CollapseAllPreviewCommand = new RelayCommand(_ => SetPreviewExpanded(false));
+        ExpandAllViewCommand = new RelayCommand(_ => { SetViewGroupsExpanded(true); RebuildFlatViewItems(); });
+        CollapseAllViewCommand = new RelayCommand(_ => { SetViewGroupsExpanded(false); RebuildFlatViewItems(); });
 
         LoadCategories();
         LoadSettings();
+        PropertyChanged += OnOwnPropertyChanged;
+        _ = LoadHistoryAsync();
+    }
+
+    // Commands don't get automatic requery outside WPF, so raise CanExecuteChanged
+    // whenever state they depend on changes.
+    private void OnOwnPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(IsOrganizing) or nameof(IsScanning) or nameof(CanUndo)
+            or nameof(SourceFolder) or nameof(CurrentFolderFileCount))
+        {
+            OrganizeCommand.RaiseCanExecuteChanged();
+            UndoCommand.RaiseCanExecuteChanged();
+            UndoOperationCommand.RaiseCanExecuteChanged();
+            ClearHistoryCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    private async Task LoadHistoryAsync()
+    {
+        await _organizer.LoadHistoryAsync();
+        RefreshHistory();
     }
 
     private void ToggleTheme()
     {
         IsDarkTheme = !IsDarkTheme;
         SaveSettings();
-        App.SwitchTheme(IsDarkTheme, this);
+        _theme.ApplyTheme(IsDarkTheme);
     }
 
     public void SaveSettings()
@@ -357,7 +464,17 @@ public class MainViewModel : ObservableObject
         var settings = new AppSettings
         {
             DestinationFolder = DestinationFolder,
-            IsDarkTheme = IsDarkTheme
+            IsDarkTheme = IsDarkTheme,
+            IncludeSubfolders = IncludeSubfolders,
+            CopyMode = CopyMode,
+            ApplyFilters = ApplyFilters,
+            ApplyRules = ApplyRules,
+            RulesAndMode = RulesAndMode,
+            SkipDuplicates = SkipDuplicates,
+            SelectedMethod = SelectedMethod,
+            SelectedViewMode = SelectedViewMode,
+            DestinationSubfolderPattern = DestinationSubfolderPattern,
+            SelectedDateGranularity = SelectedDateGranularity
         };
 
         // Add current folder to recent on save (so it appears in Recent on next launch)
@@ -395,7 +512,19 @@ public class MainViewModel : ObservableObject
         var settings = SettingsService.Load();
 
         DestinationFolder = settings.DestinationFolder;
-        IsDarkTheme = settings.IsDarkTheme;
+        _isDarkTheme = settings.IsDarkTheme;
+        _includeSubfolders = settings.IncludeSubfolders;
+        _copyMode = settings.CopyMode;
+        _moveMode = !settings.CopyMode;
+        _applyFilters = settings.ApplyFilters;
+        _applyRules = settings.ApplyRules;
+        _rulesAndMode = settings.RulesAndMode;
+        _rulesOrMode = !settings.RulesAndMode;
+        _skipDuplicates = settings.SkipDuplicates;
+        _selectedMethod = ValidOrDefault(settings.SelectedMethod, OrganizeMethod.ByType);
+        _selectedViewMode = ValidOrDefault(settings.SelectedViewMode, FileViewMode.Tree);
+        _destinationSubfolderPattern = settings.DestinationSubfolderPattern ?? "";
+        _selectedDateGranularity = ValidOrDefault(settings.SelectedDateGranularity, DateGranularity.Month);
 
         foreach (var dto in settings.RecentFolders)
         {
@@ -407,6 +536,9 @@ public class MainViewModel : ObservableObject
             });
         }
     }
+
+    private static T ValidOrDefault<T>(T value, T fallback) where T : struct, Enum =>
+        Enum.IsDefined(value) ? value : fallback;
 
     private void LoadCategories()
     {
@@ -436,11 +568,11 @@ public class MainViewModel : ObservableObject
 
     private void SelectSourceFolder()
     {
-        var dialog = new OpenFolderDialog { Title = "Select Source Folder" };
-        if (dialog.ShowDialog() == true)
+        var folder = _dialogs.PickFolder("Select Source Folder");
+        if (folder != null)
         {
             AddCurrentToRecent();
-            SourceFolder = dialog.FolderName;
+            SourceFolder = folder;
         }
     }
 
@@ -467,9 +599,9 @@ public class MainViewModel : ObservableObject
 
     private void SelectDestinationFolder()
     {
-        var dialog = new OpenFolderDialog { Title = "Select Destination Folder" };
-        if (dialog.ShowDialog() == true)
-            DestinationFolder = dialog.FolderName;
+        var folder = _dialogs.PickFolder("Select Destination Folder");
+        if (folder != null)
+            DestinationFolder = folder;
     }
 
     private bool CanOrganize() =>
@@ -487,10 +619,9 @@ public class MainViewModel : ObservableObject
         {
             _scannedFiles = [];
             TotalFiles = 0;
-            PreviewItems.Clear();
-            CategoryStatsItems.Clear();
-            StatusText = "Select a folder to start";
             IsScanning = false;
+            await RefreshPreviewAsync();
+            StatusText = "Select a folder to start";
             return;
         }
 
@@ -499,21 +630,19 @@ public class MainViewModel : ObservableObject
         IsScanning = true;
         StatusText = "Scanning...";
 
-        var dispatcher = Application.Current.Dispatcher;
-
         try
         {
             await _organizer.ScanFolderAsync(SourceFolder, IncludeSubfolders, async batch =>
             {
-                await dispatcher.InvokeAsync(() =>
+                await _dispatcher.InvokeAsync(() =>
                 {
                     _scannedFiles.AddRange(batch);
                     TotalFiles = _scannedFiles.Count;
                     CurrentFolderFileCount = _scannedFiles.Count;
                     StatusText = $"Scanning... {_scannedFiles.Count} files found";
-                    RefreshPreview();
+                    RefreshPreviewThrottled();
                 });
-            }, 1, ct);
+            }, 50, ct);
         }
         catch (OperationCanceledException)
         {
@@ -527,41 +656,40 @@ public class MainViewModel : ObservableObject
                 CurrentFolderFileCount = _scannedFiles.Count;
                 StatusText = $"{_scannedFiles.Count} files found";
                 IsScanning = false;
-                RefreshPreview();
+                RefreshPreviewDeferred();
             }
         }
     }
 
-    private List<FileItem> GetFilteredFiles()
+    /// <summary>Immutable copy of the filter settings, safe to use from a background thread.</summary>
+    private sealed record FilterState(
+        bool ApplyFilters, List<FileCategory> Categories, HashSet<string> SelectedCategoryNames,
+        bool ApplyRules, bool RulesAndMode, List<FilterRuleSnapshot> Rules);
+
+    private FilterState CaptureFilterState() => new(
+        ApplyFilters,
+        Categories.Select(c => c.Category).ToList(),
+        Categories.Where(c => c.IsSelected).Select(c => c.Name).ToHashSet(),
+        ApplyRules,
+        RulesAndMode,
+        Rules.Select(r => new FilterRuleSnapshot(r.Field, r.Operator, r.Value)).ToList());
+
+    private static List<FileItem> FilterFiles(IEnumerable<FileItem> files, FilterState filter)
     {
-        var files = _scannedFiles;
-
-        // Apply category filters
-        if (ApplyFilters)
+        if (filter.ApplyFilters)
         {
-            var activeCategories = Categories
-                .Where(c => c.IsSelected)
-                .Select(c => c.Name)
-                .ToHashSet();
-
-            var categories = Categories.Select(c => c.Category).ToList();
             files = files.Where(f =>
-            {
-                var cat = FileCategoryService.GetCategoryName(f.Extension, categories);
-                return activeCategories.Contains(cat);
-            }).ToList();
+                filter.SelectedCategoryNames.Contains(FileCategoryService.GetCategoryName(f.Extension, filter.Categories)));
         }
 
-        // Apply rules
-        if (ApplyRules && Rules.Count > 0)
+        if (filter.ApplyRules && filter.Rules.Count > 0)
         {
-            if (RulesAndMode)
-                files = files.Where(f => Rules.All(r => r.Matches(f))).ToList();
-            else
-                files = files.Where(f => Rules.Any(r => r.Matches(f))).ToList();
+            files = filter.RulesAndMode
+                ? files.Where(f => filter.Rules.All(r => r.Matches(f)))
+                : files.Where(f => filter.Rules.Any(r => r.Matches(f)));
         }
 
-        return files;
+        return files.ToList();
     }
 
     private int _refreshVersion;
@@ -569,11 +697,25 @@ public class MainViewModel : ObservableObject
 
     private void RefreshPreviewDeferred()
     {
-        RefreshPreview();
+        _ = RefreshPreviewAsync();
     }
 
-    private void RefreshPreview()
+    /// <summary>
+    /// Throttled refresh — runs at most once per 200ms while calls keep coming.
+    /// Used during scanning so the preview updates live without refreshing on every batch.
+    /// </summary>
+    private async void RefreshPreviewThrottled()
     {
+        if (_throttlePending) return;
+        _throttlePending = true;
+        try
+        {
+            await Task.Delay(200); // resumes on the UI thread
+        }
+        finally
+        {
+            _throttlePending = false;
+        }
         _ = RefreshPreviewAsync();
     }
 
@@ -603,46 +745,30 @@ public class MainViewModel : ObservableObject
 
         if (_scannedFiles.Count == 0)
         {
+            _thumbnails.CancelPending();
             PreviewItems.Clear();
             CategoryStatsItems.Clear();
+            ViewFileGroups.Clear();
+            RebuildFlatViewItems();
             return;
         }
 
         // Snapshot on UI thread to avoid race with scan callback
         var files = new List<FileItem>(_scannedFiles);
-        var activeCategories = Categories.Select(c => c.Category).ToList();
-        var selectedCategoryNames = Categories.Where(c => c.IsSelected).Select(c => c.Name).ToHashSet();
+        var filter = CaptureFilterState();
+        var activeCategories = filter.Categories;
+        var selectedCategoryNames = filter.SelectedCategoryNames;
+        var applyFilters = filter.ApplyFilters;
         var template = string.IsNullOrWhiteSpace(DestinationSubfolderPattern) ? null : DestinationSubfolderPattern;
         var dateFormat = GetDateFormat();
         var method = SelectedMethod;
-        var applyFilters = ApplyFilters;
-        var applyRules = ApplyRules;
-        var rulesAndMode = RulesAndMode;
-        var rulesCopy = Rules.Select(r => new FilterRuleSnapshot(r.Field, r.Operator, r.Value)).ToList();
         var destDisplay = DestinationDisplay;
+        Func<ViewFileItem, object?> thumbnailProvider = RequestThumbnail;
 
         // Heavy work on background thread
         var result = await Task.Run(() =>
         {
-            // Filter files
-            var filteredFiles = files.ToList();
-            if (applyFilters)
-            {
-                filteredFiles = filteredFiles.Where(f =>
-                {
-                    var cat = FileCategoryService.GetCategoryName(f.Extension, activeCategories);
-                    return selectedCategoryNames.Contains(cat);
-                }).ToList();
-            }
-
-            if (applyRules && rulesCopy.Count > 0)
-            {
-                filteredFiles = filteredFiles.Where(f =>
-                {
-                    var results = rulesCopy.Select(r => r.Matches(f));
-                    return rulesAndMode ? results.All(x => x) : results.Any(x => x);
-                }).ToList();
-            }
+            var filteredFiles = FilterFiles(files, filter);
 
             var preview = _organizer.GeneratePreview(filteredFiles, method, activeCategories, template, dateFormat);
 
@@ -713,18 +839,38 @@ public class MainViewModel : ObservableObject
                 }
             }
 
-            return (root, stats, filteredFiles.Count);
+            // Build view file groups (same grouping as tree)
+            var viewGroups = BuildViewFileGroups(preview, activeCategories, thumbnailProvider);
+
+            return (root, stats, filteredFiles.Count, viewGroups);
         });
 
         // Update UI
         PreviewItems.Clear();
         CategoryStatsItems.Clear();
 
+        // Preserve view group expanded states
+        var viewExpandedStates = new Dictionary<string, bool>();
+        foreach (var g in ViewFileGroups)
+            viewExpandedStates[g.Key] = g.IsExpanded;
+        ViewFileGroups.Clear();
+        _thumbnails.CancelPending();
+
         RestoreExpandedState(result.root, expandedNames);
         PreviewItems.Add(result.root);
 
         foreach (var stat in result.stats)
             CategoryStatsItems.Add(stat);
+
+        foreach (var vg in result.viewGroups)
+        {
+            if (viewExpandedStates.TryGetValue(vg.Key, out var wasExpanded))
+                vg.IsExpanded = wasExpanded;
+            ViewFileGroups.Add(vg);
+        }
+
+        // Build flat list for virtualized ListBox; thumbnails load lazily for visible rows
+        RebuildFlatViewItems();
 
         TotalFiles = result.Count;
         OnPropertyChanged(nameof(TypeCountText));
@@ -745,18 +891,27 @@ public class MainViewModel : ObservableObject
 
         try
         {
-            var filteredFiles = GetFilteredFiles();
-            var activeCategories = Categories.Select(c => c.Category).ToList();
+            var filter = CaptureFilterState();
+            var filteredFiles = FilterFiles(_scannedFiles.ToList(), filter);
+            var activeCategories = filter.Categories;
             var progressReporter = new Progress<int>(p => Progress = p);
             var template = string.IsNullOrWhiteSpace(DestinationSubfolderPattern) ? null : DestinationSubfolderPattern;
             var dateFormat = GetDateFormat();
 
             var result = await _organizer.OrganizeAsync(
                 filteredFiles, SourceFolder, DestinationFolder, SelectedMethod,
-                CopyMode, activeCategories, progressReporter, template, dateFormat);
+                CopyMode, activeCategories, progressReporter, template, dateFormat,
+                SkipDuplicates);
 
             var action = CopyMode ? "copied" : "moved";
-            StatusText = $"Done! {result.Moves.Count} files {action} successfully";
+            var movedCount = result.Moves.Count(m => !m.WasDuplicate);
+            var dupeInfo = result.SkippedDuplicates > 0
+                ? CopyMode
+                    ? $", {result.SkippedDuplicates} duplicates skipped"
+                    : $", {result.SkippedDuplicates} duplicates moved to {FileOrganizerService.DuplicatesFolderName}"
+                : "";
+            var failInfo = result.FailedFiles > 0 ? $", {result.FailedFiles} failed" : "";
+            StatusText = $"Done! {movedCount} files {action}{dupeInfo}{failInfo}";
             OnPropertyChanged(nameof(CanUndo));
             RefreshHistory();
             await RefreshFilesAsync();
@@ -764,7 +919,7 @@ public class MainViewModel : ObservableObject
         catch (Exception ex)
         {
             StatusText = $"Error: {ex.Message}";
-            MessageBox.Show(ex.Message, "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            _dialogs.ShowError("Error", ex.Message);
         }
         finally
         {
@@ -773,17 +928,28 @@ public class MainViewModel : ObservableObject
         }
     }
 
-    private async Task UndoAsync()
+    private async Task UndoLastAsync()
     {
+        var lastUndoable = _organizer.LastUndoableOperation;
+        if (lastUndoable != null)
+            await UndoOperationAsync(lastUndoable);
+    }
+
+    private async Task UndoOperationAsync(OrganizeOperation? operation)
+    {
+        if (operation == null || !_organizer.CanUndoOperation(operation)) return;
+
         IsOrganizing = true;
-        StatusText = "Undoing last operation...";
+        StatusText = "Undoing operation...";
         Progress = 0;
 
         try
         {
             var progressReporter = new Progress<int>(p => Progress = p);
-            var count = await _organizer.UndoLastOperationAsync(progressReporter);
-            StatusText = $"Undo complete! {count} files restored";
+            var result = await _organizer.UndoOperationAsync(operation, progressReporter);
+            StatusText = result.Failed == 0
+                ? $"Undo complete! {result.Restored} files restored"
+                : $"Undo partially complete: {result.Restored} files restored, {result.Failed} could not be restored";
             OnPropertyChanged(nameof(CanUndo));
             RefreshHistory();
             await RefreshFilesAsync();
@@ -834,10 +1000,141 @@ public class MainViewModel : ObservableObject
             RestoreExpandedState(child, collapsedNames, fullPath);
     }
 
+    private static List<ViewFileGroup> BuildViewFileGroups(
+        ObservableCollection<PreviewItem> preview, List<FileCategory> categories,
+        Func<ViewFileItem, object?> thumbnailProvider)
+    {
+        var result = new List<ViewFileGroup>();
+
+        foreach (var group in preview)
+        {
+            var files = new List<ViewFileItem>();
+            FlattenPreviewGroup(group, files, categories, thumbnailProvider);
+            result.Add(new ViewFileGroup
+            {
+                Key = group.Name,
+                HeaderText = $"{group.Name}  ({files.Count})",
+                FileCount = files.Count,
+                Files = files
+            });
+        }
+
+        return result;
+    }
+
+    private static void FlattenPreviewGroup(PreviewItem item, List<ViewFileItem> result,
+        List<FileCategory> categories, Func<ViewFileItem, object?> thumbnailProvider)
+    {
+        foreach (var child in item.Children)
+        {
+            if (child.IsFolder)
+            {
+                FlattenPreviewGroup(child, result, categories, thumbnailProvider);
+            }
+            else if (child.File is { } file)
+            {
+                var catName = FileCategoryService.GetCategoryName(file.Extension, categories);
+
+                result.Add(new ViewFileItem
+                {
+                    FileName = file.FileName,
+                    Extension = file.Extension,
+                    Icon = GetCategoryIcon(catName),
+                    SizeText = FormatSize(file.Size),
+                    DateText = file.DateModified.ToString("MMM dd, yyyy HH:mm"),
+                    FullPath = file.FullPath,
+                    DateModified = file.DateModified,
+                    CategoryName = catName,
+                    HasThumbnailSupport = HasThumbnailSupport(file.Extension),
+                    ThumbnailProvider = thumbnailProvider
+                });
+            }
+        }
+    }
+
+    private object? RequestThumbnail(ViewFileItem item) =>
+        _thumbnails.GetOrRequest(item.FullPath, item.DateModified, ThumbnailSize, image => item.Thumbnail = image);
+
+    private static string GetCategoryIcon(string categoryName) => categoryName switch
+    {
+        "Documents" => "\uE8A5",
+        "Images" => "\uE8B9",
+        "Videos" => "\uE8B2",
+        "Music" => "\uE8D6",
+        "Archives" => "\uE8C8",
+        "Code" => "\uE943",
+        "Executables" => "\uE756",
+        "Fonts" => "\uE8D2",
+        _ => "\uE7C3"
+    };
+
+    private static readonly HashSet<string> ThumbnailExtensions =
+    [
+        // Images
+        ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".ico", ".tiff", ".tif", ".webp", ".heic", ".heif", ".svg",
+        // Documents
+        ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp", ".rtf",
+        // Videos
+        ".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".mpg", ".mpeg",
+        // Other
+        ".psd", ".ai", ".eps", ".html", ".htm"
+    ];
+
+    private static bool HasThumbnailSupport(string ext) =>
+        ThumbnailExtensions.Contains(ext.ToLowerInvariant());
+
+    private static string FormatSize(long size) => size switch
+    {
+        < 1024 => $"{size} B",
+        < 1024 * 1024 => $"{size / 1024.0:F1} KB",
+        < 1024L * 1024 * 1024 => $"{size / (1024.0 * 1024):F1} MB",
+        _ => $"{size / (1024.0 * 1024 * 1024):F2} GB"
+    };
+
+    private void SetPreviewExpanded(bool expanded)
+    {
+        foreach (var item in PreviewItems)
+            SetPreviewItemExpanded(item, expanded);
+    }
+
+    private static void SetPreviewItemExpanded(PreviewItem item, bool expanded)
+    {
+        if (item.IsFolder)
+            item.IsExpanded = expanded;
+        foreach (var child in item.Children)
+            SetPreviewItemExpanded(child, expanded);
+    }
+
+    private void SetViewGroupsExpanded(bool expanded)
+    {
+        foreach (var group in ViewFileGroups)
+            group.IsExpanded = expanded;
+    }
+
+    private void RebuildFlatViewItems()
+    {
+        var flat = new List<ViewFileItem>();
+        foreach (var vg in ViewFileGroups)
+        {
+            flat.Add(new ViewFileItem
+            {
+                IsHeader = true,
+                Group = vg,
+                HeaderText = vg.HeaderText,
+                Icon = vg.IsExpanded ? "\uE76C" : "\uE76B"
+            });
+            if (vg.IsExpanded)
+                flat.AddRange(vg.Files);
+        }
+        FlatViewItems = flat;
+        OnPropertyChanged(nameof(FlatViewItems));
+    }
+
     private void RefreshHistory()
     {
         HistoryItems.Clear();
         foreach (var op in _organizer.History.Reverse())
             HistoryItems.Add(op);
+        OnPropertyChanged(nameof(CanUndo));
     }
 }

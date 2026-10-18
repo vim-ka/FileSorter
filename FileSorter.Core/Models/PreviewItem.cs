@@ -10,6 +10,7 @@ public class PreviewItem : System.ComponentModel.INotifyPropertyChanged
     public string Icon { get; set; } = string.Empty;
     public bool IsFolder { get; set; }
     public int FileCount { get; set; }
+    public FileItem? File { get; set; }
     public ObservableCollection<PreviewItem> Children { get; set; } = [];
 
     public bool IsExpanded

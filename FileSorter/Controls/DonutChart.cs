@@ -103,7 +103,7 @@ public class DonutChart : Control
         {
             if (item.SweepAngle <= 0) continue;
 
-            var brush = new SolidColorBrush(item.Color);
+            var brush = new SolidColorBrush(Color.FromRgb(item.Color.R, item.Color.G, item.Color.B));
             brush.Freeze();
 
             DrawArcSegment(dc, center, outerRadius, innerRadius, startAngle, item.SweepAngle, brush, bgColor);

@@ -17,6 +17,15 @@ public partial class MainWindow : Window
         };
     }
 
+    /// <summary>
+    /// Carries over panel widths set via the GridSplitters when the window is recreated on theme switch.
+    /// </summary>
+    public void CopyLayoutFrom(MainWindow other)
+    {
+        LeftPanelColumn.Width = other.LeftPanelColumn.Width;
+        RightPanelColumn.Width = other.RightPanelColumn.Width;
+    }
+
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (e.ClickCount == 2)

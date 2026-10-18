@@ -1,58 +1,63 @@
 using System.Collections.ObjectModel;
-using System.IO;
+using System.Security.Cryptography;
 using FileSorter.Models;
 
 namespace FileSorter.Services;
 
 public class FileOrganizerService
 {
-    private readonly Stack<OrganizeOperation> _undoStack = new();
+    /// <summary>
+    /// Duplicates found in Move mode are moved here (inside the target folder) instead of being
+    /// deleted, so they stay recoverable via Undo. The folder is excluded from scanning.
+    /// </summary>
+    public const string DuplicatesFolderName = "_duplicates";
+
     private readonly List<OrganizeOperation> _history = [];
     private List<FileCategory> _categories = FileCategoryService.GetDefaultCategories();
 
-    public bool CanUndo => _undoStack.Count > 0;
     public IReadOnlyList<OrganizeOperation> History => _history;
 
-    public void ClearHistory()
+    public async Task LoadHistoryAsync()
+    {
+        var loaded = await HistoryService.LoadAsync();
+        _history.Clear();
+        _history.AddRange(loaded);
+    }
+
+    public async Task ClearHistoryAsync()
     {
         _history.Clear();
-        _undoStack.Clear();
+        await HistoryService.SaveAsync(_history);
     }
+
+    /// <summary>
+    /// An operation can be undone unless a later, still active operation moved files out of
+    /// the places this one put them — undoing it first would leave those files stranded.
+    /// </summary>
+    public bool CanUndoOperation(OrganizeOperation operation)
+    {
+        if (operation.IsUndone) return false;
+
+        var index = _history.IndexOf(operation);
+        if (index < 0) return false;
+
+        var laterSources = _history
+            .Skip(index + 1)
+            .Where(op => !op.IsUndone)
+            .SelectMany(op => op.Moves)
+            .Where(m => !m.IsUndone && !m.WasCopied)
+            .Select(m => m.SourcePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return laterSources.Count == 0
+            || !operation.Moves.Any(m => !m.IsUndone && laterSources.Contains(m.DestinationPath));
+    }
+
+    public OrganizeOperation? LastUndoableOperation => _history.LastOrDefault(CanUndoOperation);
 
     public void SetCategories(List<FileCategory> categories)
     {
         _categories = categories;
-    }
-
-    public List<FileItem> ScanFolder(string folderPath, bool includeSubfolders)
-    {
-        if (!Directory.Exists(folderPath))
-            return [];
-
-        var option = includeSubfolders
-            ? SearchOption.AllDirectories
-            : SearchOption.TopDirectoryOnly;
-
-        var files = new List<FileItem>();
-        foreach (var filePath in Directory.EnumerateFiles(folderPath, "*.*", option))
-        {
-            try
-            {
-                var info = new FileInfo(filePath);
-                files.Add(new FileItem
-                {
-                    FullPath = filePath,
-                    Size = info.Length,
-                    DateModified = info.LastWriteTime,
-                    DateCreated = info.CreationTime
-                });
-            }
-            catch
-            {
-                // Skip files we can't access
-            }
-        }
-        return files;
     }
 
     /// <summary>
@@ -71,10 +76,12 @@ public class FileOrganizerService
         await Task.Run(async () =>
         {
             var batch = new List<FileItem>(batchSize);
+            var duplicatesFolder = Path.Combine(folderPath, DuplicatesFolderName);
 
             foreach (var filePath in Directory.EnumerateFiles(folderPath, "*.*", option))
             {
                 ct.ThrowIfCancellationRequested();
+                if (IsUnderFolder(filePath, duplicatesFolder)) continue;
 
                 try
                 {
@@ -141,7 +148,8 @@ public class FileOrganizerService
                         {
                             Name = file.FileName,
                             IsFolder = false,
-                            Icon = "\uE8A5"
+                            Icon = "\uE8A5",
+                            File = file
                         });
                     }
                 }
@@ -162,114 +170,198 @@ public class FileOrganizerService
         List<FileCategory> activeCategories,
         IProgress<int>? progress = null,
         string? template = null,
-        string? dateFormat = null)
+        string? dateFormat = null,
+        bool skipDuplicates = false)
     {
         var targetFolder = destinationFolder ?? sourceFolder;
+        var duplicatesFolder = Path.Combine(targetFolder, DuplicatesFolderName);
         var grouped = GroupFiles(files, method, activeCategories, template, dateFormat);
-        var operation = new OrganizeOperation
-        {
-            Description = $"Organized {files.Count} files by {method}"
-        };
+        var operation = new OrganizeOperation();
+        var duplicates = skipDuplicates ? new DuplicateIndex() : null;
 
         int processed = 0;
-        int total = files.Count;
+        int total = grouped.Sum(g => g.Value.Count);
 
-        await Task.Run(() =>
+        try
         {
-            foreach (var group in grouped)
+            await Task.Run(() =>
             {
-                var normalizedKey = group.Key.Replace('/', Path.DirectorySeparatorChar);
-                var folderPath = Path.Combine(targetFolder, normalizedKey);
-                Directory.CreateDirectory(folderPath);
-
-                foreach (var file in group.Value)
+                foreach (var group in grouped)
                 {
-                    var destPath = Path.Combine(folderPath, file.FileName);
-                    destPath = GetUniqueFileName(destPath);
+                    var normalizedKey = group.Key.Replace('/', Path.DirectorySeparatorChar);
+                    var folderPath = Path.Combine(targetFolder, normalizedKey);
 
                     try
                     {
-                        if (copyMode)
-                        {
-                            File.Copy(file.FullPath, destPath, false);
-                        }
-                        else
-                        {
-                            File.Move(file.FullPath, destPath);
-                        }
-
-                        operation.Moves.Add(new FileMove
-                        {
-                            SourcePath = file.FullPath,
-                            DestinationPath = destPath,
-                            WasCopied = copyMode
-                        });
+                        Directory.CreateDirectory(folderPath);
+                        duplicates?.AddExistingFiles(folderPath);
                     }
                     catch
                     {
-                        // Skip files that fail
+                        // Can't create or read the target folder — every file of the group fails
+                        operation.FailedFiles += group.Value.Count;
+                        processed += group.Value.Count;
+                        progress?.Report(processed * 100 / Math.Max(total, 1));
+                        continue;
                     }
 
-                    processed++;
-                    progress?.Report((int)((double)processed / total * 100));
+                    foreach (var file in group.Value)
+                    {
+                        processed++;
+                        try
+                        {
+                            ProcessFile(file, folderPath);
+                        }
+                        catch
+                        {
+                            operation.FailedFiles++;
+                        }
+                        progress?.Report(processed * 100 / Math.Max(total, 1));
+                    }
                 }
-            }
-        });
-
-        if (operation.Moves.Count > 0)
+            });
+        }
+        finally
         {
-            _undoStack.Push(operation);
-            _history.Add(operation);
+            // Record whatever was done, even if something unexpected aborted the loop,
+            // so it can still be undone.
+            var verb = copyMode ? "Copied" : "Moved";
+            var by = template != null && template.Contains('#') ? "template" : method.ToString();
+            operation.Description = $"{verb} {operation.Moves.Count(m => !m.WasDuplicate)} files by {by}";
+
+            if (operation.Moves.Count > 0)
+            {
+                _history.Add(operation);
+                TrimHistory();
+                await HistoryService.SaveAsync(_history);
+            }
         }
 
         return operation;
+
+        void ProcessFile(FileItem file, string folderPath)
+        {
+            if (IsUnderFolder(file.FullPath, duplicatesFolder))
+                return;
+
+            var destPath = Path.Combine(folderPath, file.FileName);
+
+            // Already where it belongs (re-organizing an organized folder) — leave it alone
+            if (PathsEqual(destPath, file.FullPath))
+                return;
+
+            if (duplicates != null && duplicates.IsDuplicate(file.FullPath, file.Size))
+            {
+                operation.SkippedDuplicates++;
+                if (copyMode)
+                    return; // nothing to do — the original stays untouched
+
+                Directory.CreateDirectory(duplicatesFolder);
+                var dupPath = GetUniqueFileName(Path.Combine(duplicatesFolder, file.FileName));
+                File.Move(file.FullPath, dupPath);
+                operation.Moves.Add(new FileMove
+                {
+                    SourcePath = file.FullPath,
+                    DestinationPath = dupPath,
+                    WasDuplicate = true
+                });
+                return;
+            }
+
+            destPath = GetUniqueFileName(destPath);
+            if (copyMode)
+                File.Copy(file.FullPath, destPath, false);
+            else
+                File.Move(file.FullPath, destPath);
+
+            var written = new FileInfo(destPath);
+            operation.Moves.Add(new FileMove
+            {
+                SourcePath = file.FullPath,
+                DestinationPath = destPath,
+                WasCopied = copyMode,
+                Size = written.Length,
+                LastWriteTimeUtc = written.LastWriteTimeUtc
+            });
+            duplicates?.Add(destPath, written.Length, file.FullPath);
+        }
     }
 
-    public async Task<int> UndoLastOperationAsync(IProgress<int>? progress = null)
+    public async Task<UndoResult> UndoOperationAsync(OrganizeOperation operation, IProgress<int>? progress = null)
     {
-        if (!CanUndo) return 0;
+        if (!CanUndoOperation(operation)) return new UndoResult(0, 0);
 
-        var operation = _undoStack.Pop();
-        int undone = 0;
-        int total = operation.Moves.Count;
+        int restored = 0;
+        int failed = 0;
+        var pending = operation.Moves.Where(m => !m.IsUndone && IsUndoable(m)).ToList();
 
         await Task.Run(() =>
         {
-            foreach (var move in operation.Moves)
+            for (int i = 0; i < pending.Count; i++)
             {
+                var move = pending[i];
                 try
                 {
-                    if (move.WasCopied)
+                    if (UndoMove(move))
                     {
-                        if (File.Exists(move.DestinationPath))
-                            File.Delete(move.DestinationPath);
+                        move.IsUndone = true;
+                        restored++;
                     }
                     else
                     {
-                        if (File.Exists(move.DestinationPath) && !File.Exists(move.SourcePath))
-                            File.Move(move.DestinationPath, move.SourcePath);
+                        failed++;
                     }
-                    undone++;
                 }
                 catch
                 {
-                    // Skip files that fail to undo
+                    failed++;
                 }
 
-                progress?.Report((int)((double)undone / total * 100));
+                progress?.Report((i + 1) * 100 / pending.Count);
             }
 
-            // Clean up empty folders
-            CleanEmptyFolders(operation);
+            CleanEmptyFolders(pending.Where(m => m.IsUndone));
         });
 
-        _history.Add(new OrganizeOperation
+        // Partially undone operations stay in history so the rest can be retried
+        operation.IsUndone = operation.Moves.All(m => m.IsUndone || !IsUndoable(m));
+        await HistoryService.SaveAsync(_history);
+
+        return new UndoResult(restored, failed);
+    }
+
+    // Entries without a destination come from older versions that deleted duplicates outright
+    private static bool IsUndoable(FileMove move) => !string.IsNullOrEmpty(move.DestinationPath);
+
+    private static bool UndoMove(FileMove move)
+    {
+        if (!File.Exists(move.DestinationPath))
+            return false;
+
+        if (move.WasCopied)
         {
-            Description = $"Undone: {operation.Description} ({undone} files restored)",
-            Timestamp = DateTime.Now
-        });
+            // Only delete the copy if it's still the file we wrote
+            var info = new FileInfo(move.DestinationPath);
+            if (info.Length != move.Size || info.LastWriteTimeUtc != move.LastWriteTimeUtc)
+                return false;
 
-        return undone;
+            File.Delete(move.DestinationPath);
+            return true;
+        }
+
+        if (File.Exists(move.SourcePath))
+            return false;
+
+        Directory.CreateDirectory(Path.GetDirectoryName(move.SourcePath)!);
+        File.Move(move.DestinationPath, move.SourcePath);
+        return true;
+    }
+
+    private void TrimHistory()
+    {
+        var excess = _history.Count - HistoryService.MaxOperations;
+        if (excess > 0)
+            _history.RemoveRange(0, excess);
     }
 
     private Dictionary<string, List<FileItem>> GroupFiles(
@@ -480,11 +572,12 @@ public class FileOrganizerService
         return path;
     }
 
-    private static void CleanEmptyFolders(OrganizeOperation operation)
+    private static void CleanEmptyFolders(IEnumerable<FileMove> undoneMoves)
     {
-        var folders = operation.Moves
-            .Select(m => Path.GetDirectoryName(m.DestinationPath)!)
-            .Distinct();
+        var folders = undoneMoves
+            .Select(m => Path.GetDirectoryName(m.DestinationPath))
+            .OfType<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase);
 
         foreach (var folder in folders)
         {
@@ -499,4 +592,80 @@ public class FileOrganizerService
             }
         }
     }
+
+    private static bool PathsEqual(string a, string b) =>
+        string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsUnderFolder(string path, string folder) =>
+        Path.GetFullPath(path).StartsWith(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder)) + Path.DirectorySeparatorChar,
+            StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Content-based duplicate lookup. Files are bucketed by size and only hashed (SHA-256)
+    /// when another file of exactly the same size exists, so most files are never read.
+    /// </summary>
+    private sealed class DuplicateIndex
+    {
+        private readonly Dictionary<long, List<string>> _pathsBySize = [];
+        private readonly Dictionary<string, string?> _hashes = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _known = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _scannedFolders = new(StringComparer.OrdinalIgnoreCase);
+
+        public void AddExistingFiles(string folder)
+        {
+            if (!_scannedFolders.Add(folder)) return;
+            foreach (var path in Directory.EnumerateFiles(folder))
+            {
+                try { Add(path, new FileInfo(path).Length); }
+                catch { /* skip unreadable */ }
+            }
+        }
+
+        /// <param name="hashSourcePath">Where the content was read from if it was already hashed under another path (before a move).</param>
+        public void Add(string path, long size, string? hashSourcePath = null)
+        {
+            if (!_known.Add(path)) return;
+            if (hashSourcePath != null && _hashes.TryGetValue(hashSourcePath, out var hash))
+                _hashes[path] = hash;
+            if (!_pathsBySize.TryGetValue(size, out var list))
+                _pathsBySize[size] = list = [];
+            list.Add(path);
+        }
+
+        /// <summary>True if a different file with identical content is already indexed.</summary>
+        public bool IsDuplicate(string path, long size)
+        {
+            if (!_pathsBySize.TryGetValue(size, out var candidates)) return false;
+
+            string? hash = null;
+            foreach (var other in candidates)
+            {
+                if (string.Equals(other, path, StringComparison.OrdinalIgnoreCase)) continue;
+
+                hash ??= GetHash(path);
+                if (hash == null) return false;
+                if (GetHash(other) == hash) return true;
+            }
+            return false;
+        }
+
+        private string? GetHash(string path)
+        {
+            if (_hashes.TryGetValue(path, out var hash)) return hash;
+            try
+            {
+                using var stream = File.OpenRead(path);
+                hash = Convert.ToHexString(SHA256.HashData(stream));
+            }
+            catch
+            {
+                hash = null;
+            }
+            _hashes[path] = hash;
+            return hash;
+        }
+    }
 }
+
+public readonly record struct UndoResult(int Restored, int Failed);
