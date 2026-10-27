@@ -8,7 +8,8 @@ namespace FileSorter.Services;
 /// </summary>
 internal static class JsonFileStore
 {
-    public static readonly string DataDir =
+    /// <summary>Settable so tests can redirect persistence away from the real profile.</summary>
+    public static string DataDir { get; set; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FileSorter");
 
     // Enums are written as strings; numeric values from older files are still accepted.

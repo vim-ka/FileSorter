@@ -11,4 +11,8 @@
     <PackageReference Include="MetadataExtractor" Version="2.8.1" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="FileSorter.Core.Tests" />
+  </ItemGroup>
+
 </Project>

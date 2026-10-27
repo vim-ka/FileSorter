@@ -8,15 +8,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # From the repo root:
 dotnet build FileSorter.sln
 dotnet run --project FileSorter
+dotnet test FileSorter.Core.Tests
 ```
 
 This is a WPF app (`UseWPF`, `WinExe`) targeting .NET 10. Must be built/run on Windows with the Windows Desktop SDK — cannot run from WSL directly.
 
 ## Architecture
 
-MVVM (no framework, hand-rolled). Solution file at root: `FileSorter.sln`, two projects:
+MVVM (no framework, hand-rolled). Solution file at root: `FileSorter.sln`, three projects:
 
 - **`FileSorter.Core`** (`net10.0`, no WPF — keep it that way, it's the base for a future Avalonia/macOS UI): `Models/`, `Services/`, `ViewModels/`, `Abstractions/`. Platform-specific needs go through interfaces in `Abstractions/` (`IUiDispatcher`, `IDialogService`, `IThumbnailProvider`, `IThemeService`); colors are `RgbColor`, thumbnails are opaque `object`s. Commands don't rely on WPF `CommandManager` — `MainViewModel` raises `CanExecuteChanged` explicitly.
+- **`FileSorter.Core.Tests`** (xunit, `net10.0`): tests for Core. `JsonFileStore.DataDir` is settable so tests redirect settings/history away from `%LocalAppData%` (see `TestData`); `MainViewModel` is driven with fake `IUiDispatcher`/`IDialogService` implementations.
 - **`FileSorter`** (WPF, `net10.0-windows`): `App`, `Views/`, `Themes/`, `Controls/`, `Converters/`, `Platform/` (WPF/Windows implementations of the Core abstractions, Shell thumbnails). `App.OnStartup` wires them into `MainViewModel`. XAML references Core namespaces with `;assembly=FileSorter.Core`.
 
 - **MVVM base classes** — `ObservableObject` (INotifyPropertyChanged), `RelayCommand`/`AsyncRelayCommand` (ICommand) in `ViewModels/`

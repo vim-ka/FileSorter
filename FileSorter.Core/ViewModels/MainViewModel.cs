@@ -636,6 +636,9 @@ public class MainViewModel : ObservableObject
             {
                 await _dispatcher.InvokeAsync(() =>
                 {
+                    // A batch posted before cancellation may land after a newer scan reset the list
+                    if (ct.IsCancellationRequested) return;
+
                     _scannedFiles.AddRange(batch);
                     TotalFiles = _scannedFiles.Count;
                     CurrentFolderFileCount = _scannedFiles.Count;
@@ -656,7 +659,10 @@ public class MainViewModel : ObservableObject
                 CurrentFolderFileCount = _scannedFiles.Count;
                 StatusText = $"{_scannedFiles.Count} files found";
                 IsScanning = false;
-                RefreshPreviewDeferred();
+                // A throttled refresh queued by the last batch will run within 200ms anyway —
+                // don't do the full recomputation twice.
+                if (!_throttlePending)
+                    RefreshPreviewDeferred();
             }
         }
     }

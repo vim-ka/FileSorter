@@ -17,15 +17,26 @@ public class FileOrganizerService
 
     public IReadOnlyList<OrganizeOperation> History => _history;
 
-    public async Task LoadHistoryAsync()
+    private Task? _historyLoad;
+
+    /// <summary>
+    /// Loads persisted history. Operations that mutate history wait for a pending load first,
+    /// so an organize started right after launch is never overwritten by the loaded list.
+    /// </summary>
+    public Task LoadHistoryAsync() => _historyLoad = LoadHistoryCoreAsync();
+
+    private async Task LoadHistoryCoreAsync()
     {
         var loaded = await HistoryService.LoadAsync();
         _history.Clear();
         _history.AddRange(loaded);
     }
 
+    private Task EnsureHistoryLoadedAsync() => _historyLoad ?? Task.CompletedTask;
+
     public async Task ClearHistoryAsync()
     {
+        await EnsureHistoryLoadedAsync();
         _history.Clear();
         await HistoryService.SaveAsync(_history);
     }
@@ -69,19 +80,23 @@ public class FileOrganizerService
     {
         if (!Directory.Exists(folderPath)) return;
 
-        var option = includeSubfolders
-            ? SearchOption.AllDirectories
-            : SearchOption.TopDirectoryOnly;
+        var options = new EnumerationOptions
+        {
+            RecurseSubdirectories = includeSubfolders,
+            IgnoreInaccessible = true,   // an unreadable subfolder must not abort the whole scan
+            AttributesToSkip = 0         // include hidden/system files, like SearchOption did
+        };
 
         await Task.Run(async () =>
         {
             var batch = new List<FileItem>(batchSize);
-            var duplicatesFolder = Path.Combine(folderPath, DuplicatesFolderName);
+            var duplicatesPrefix = FolderPrefix(Path.Combine(folderPath, DuplicatesFolderName));
 
-            foreach (var filePath in Directory.EnumerateFiles(folderPath, "*.*", option))
+            foreach (var filePath in Directory.EnumerateFiles(folderPath, "*", options))
             {
                 ct.ThrowIfCancellationRequested();
-                if (IsUnderFolder(filePath, duplicatesFolder)) continue;
+                // Paths from EnumerateFiles are already rooted — no per-file GetFullPath needed
+                if (filePath.StartsWith(duplicatesPrefix, StringComparison.OrdinalIgnoreCase)) continue;
 
                 try
                 {
@@ -173,19 +188,22 @@ public class FileOrganizerService
         string? dateFormat = null,
         bool skipDuplicates = false)
     {
+        await EnsureHistoryLoadedAsync();
+
         var targetFolder = destinationFolder ?? sourceFolder;
         var duplicatesFolder = Path.Combine(targetFolder, DuplicatesFolderName);
-        var grouped = GroupFiles(files, method, activeCategories, template, dateFormat);
         var operation = new OrganizeOperation();
         var duplicates = skipDuplicates ? new DuplicateIndex() : null;
-
-        int processed = 0;
-        int total = grouped.Sum(g => g.Value.Count);
 
         try
         {
             await Task.Run(() =>
             {
+                // Grouping may read EXIF (ByDateTaken / #datetaken) — keep it off the UI thread
+                var grouped = GroupFiles(files, method, activeCategories, template, dateFormat);
+                int processed = 0;
+                int total = grouped.Sum(g => g.Value.Count);
+
                 foreach (var group in grouped)
                 {
                     var normalizedKey = group.Key.Replace('/', Path.DirectorySeparatorChar);
@@ -291,6 +309,8 @@ public class FileOrganizerService
     {
         if (!CanUndoOperation(operation)) return new UndoResult(0, 0);
 
+        await EnsureHistoryLoadedAsync();
+
         int restored = 0;
         int failed = 0;
         var pending = operation.Moves.Where(m => !m.IsUndone && IsUndoable(m)).ToList();
@@ -302,14 +322,21 @@ public class FileOrganizerService
                 var move = pending[i];
                 try
                 {
-                    if (UndoMove(move))
+                    switch (UndoMove(move))
                     {
-                        move.IsUndone = true;
-                        restored++;
-                    }
-                    else
-                    {
-                        failed++;
+                        case UndoOutcome.Restored:
+                            move.IsUndone = true;
+                            restored++;
+                            break;
+                        case UndoOutcome.Gone:
+                            // Nothing left to put back — don't keep the operation pending forever,
+                            // which would shadow older operations for the Undo button.
+                            move.IsUndone = true;
+                            failed++;
+                            break;
+                        default:
+                            failed++;
+                            break;
                     }
                 }
                 catch
@@ -333,28 +360,37 @@ public class FileOrganizerService
     // Entries without a destination come from older versions that deleted duplicates outright
     private static bool IsUndoable(FileMove move) => !string.IsNullOrEmpty(move.DestinationPath);
 
-    private static bool UndoMove(FileMove move)
+    private enum UndoOutcome
+    {
+        Restored,
+        /// <summary>Destination still exists but can't be touched safely (source reappeared, copy was modified) — retry later.</summary>
+        Blocked,
+        /// <summary>Destination no longer exists; there is nothing to restore.</summary>
+        Gone
+    }
+
+    private static UndoOutcome UndoMove(FileMove move)
     {
         if (!File.Exists(move.DestinationPath))
-            return false;
+            return UndoOutcome.Gone;
 
         if (move.WasCopied)
         {
             // Only delete the copy if it's still the file we wrote
             var info = new FileInfo(move.DestinationPath);
             if (info.Length != move.Size || info.LastWriteTimeUtc != move.LastWriteTimeUtc)
-                return false;
+                return UndoOutcome.Blocked;
 
             File.Delete(move.DestinationPath);
-            return true;
+            return UndoOutcome.Restored;
         }
 
         if (File.Exists(move.SourcePath))
-            return false;
+            return UndoOutcome.Blocked;
 
         Directory.CreateDirectory(Path.GetDirectoryName(move.SourcePath)!);
         File.Move(move.DestinationPath, move.SourcePath);
-        return true;
+        return UndoOutcome.Restored;
     }
 
     private void TrimHistory()
@@ -368,30 +404,22 @@ public class FileOrganizerService
         List<FileItem> files, OrganizeMethod method, List<FileCategory> activeCategories,
         string? template = null, string? dateFormat = null)
     {
-        var activeCategoryNames = activeCategories
-            .Where(c => c.IsSelected)
-            .Select(c => c.Name)
-            .ToHashSet();
-
-        var filteredFiles = files.Where(f =>
-        {
-            var cat = FileCategoryService.GetCategoryName(f.Extension, activeCategories);
-            return activeCategoryNames.Contains(cat);
-        }).ToList();
+        // Category/rule filtering is the caller's responsibility (MainViewModel.FilterFiles honours
+        // the ApplyFilters toggle); every file passed in is grouped.
 
         // If template contains tokens, use template-based grouping
         if (!string.IsNullOrWhiteSpace(template) && template.Contains('#'))
-            return GroupByTemplate(filteredFiles, template, activeCategories);
+            return GroupByTemplate(files, template, activeCategories);
 
         return method switch
         {
-            OrganizeMethod.ByType => GroupByType(filteredFiles),
-            OrganizeMethod.ByExtension => GroupByExtension(filteredFiles),
-            OrganizeMethod.ByDate => GroupByDate(filteredFiles, dateFormat ?? "yyyy-MM"),
-            OrganizeMethod.ByAlphabet => GroupByAlphabet(filteredFiles),
-            OrganizeMethod.BySize => GroupBySize(filteredFiles),
-            OrganizeMethod.ByDateTaken => GroupByDateTaken(filteredFiles, dateFormat ?? "yyyy-MM"),
-            _ => GroupByType(filteredFiles)
+            OrganizeMethod.ByType => GroupByType(files),
+            OrganizeMethod.ByExtension => GroupByExtension(files),
+            OrganizeMethod.ByDate => GroupByDate(files, dateFormat ?? "yyyy-MM"),
+            OrganizeMethod.ByAlphabet => GroupByAlphabet(files),
+            OrganizeMethod.BySize => GroupBySize(files),
+            OrganizeMethod.ByDateTaken => GroupByDateTaken(files, dateFormat ?? "yyyy-MM"),
+            _ => GroupByType(files)
         };
     }
 
@@ -521,7 +549,7 @@ public class FileOrganizerService
         result = result.Replace("#ext", file.Extension.TrimStart('.').ToUpperInvariant());
         result = result.Replace("#year", file.DateModified.Year.ToString());
         result = result.Replace("#month", file.DateModified.ToString("MM"));
-        result = result.Replace("#date", file.DateModified.ToString("yyyy-MM-dd"));
+        // Longer tokens first: "#date" is a prefix of "#datetaken" (same as #extension before #ext)
         if (result.Contains("#datetaken"))
         {
             if (!file.DateTakenLoaded && PhotoMetadataService.IsExifSupported(file.FullPath))
@@ -529,8 +557,9 @@ public class FileOrganizerService
                 file.DateTaken = PhotoMetadataService.GetDateTaken(file.FullPath);
                 file.DateTakenLoaded = true;
             }
+            result = result.Replace("#datetaken", (file.DateTaken ?? file.DateModified).ToString("yyyy-MM"));
         }
-        result = result.Replace("#datetaken", (file.DateTaken ?? file.DateModified).ToString("yyyy-MM"));
+        result = result.Replace("#date", file.DateModified.ToString("yyyy-MM-dd"));
         result = result.Replace("#alpha", GetAlphaKey(file.FileName));
         result = result.Replace("#size", GetSizeKey(file.Size));
 
@@ -597,9 +626,11 @@ public class FileOrganizerService
         string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
 
     private static bool IsUnderFolder(string path, string folder) =>
-        Path.GetFullPath(path).StartsWith(
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder)) + Path.DirectorySeparatorChar,
-            StringComparison.OrdinalIgnoreCase);
+        Path.GetFullPath(path).StartsWith(FolderPrefix(folder), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Normalized folder path with a trailing separator, for prefix checks.</summary>
+    private static string FolderPrefix(string folder) =>
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder)) + Path.DirectorySeparatorChar;
 
     /// <summary>
     /// Content-based duplicate lookup. Files are bucketed by size and only hashed (SHA-256)
