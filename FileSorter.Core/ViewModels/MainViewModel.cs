@@ -607,8 +607,22 @@ public class MainViewModel : ObservableObject
     private bool CanOrganize() =>
         !string.IsNullOrEmpty(SourceFolder) && _scannedFiles.Count > 0 && !IsOrganizing;
 
-    private async Task RefreshFilesAsync()
+    /// <summary>
+    /// Result of the last organize/undo. While set, the rescan and preview refresh that follow
+    /// the operation don't overwrite the status bar; cleared by the next user-driven refresh.
+    /// </summary>
+    private string? _pinnedStatus;
+
+    private void PinStatus(string message)
     {
+        _pinnedStatus = message;
+        StatusText = message;
+    }
+
+    private async Task RefreshFilesAsync(bool keepStatus = false)
+    {
+        if (!keepStatus) _pinnedStatus = null;
+
         // Cancel previous scan
         _scanCts?.Cancel();
         _scanCts?.Dispose();
@@ -628,7 +642,7 @@ public class MainViewModel : ObservableObject
         _scannedFiles = [];
         TotalFiles = 0;
         IsScanning = true;
-        StatusText = "Scanning...";
+        if (_pinnedStatus == null) StatusText = "Scanning...";
 
         try
         {
@@ -642,7 +656,7 @@ public class MainViewModel : ObservableObject
                     _scannedFiles.AddRange(batch);
                     TotalFiles = _scannedFiles.Count;
                     CurrentFolderFileCount = _scannedFiles.Count;
-                    StatusText = $"Scanning... {_scannedFiles.Count} files found";
+                    if (_pinnedStatus == null) StatusText = $"Scanning... {_scannedFiles.Count} files found";
                     RefreshPreviewThrottled();
                 });
             }, 50, ct);
@@ -657,12 +671,13 @@ public class MainViewModel : ObservableObject
             {
                 TotalFiles = _scannedFiles.Count;
                 CurrentFolderFileCount = _scannedFiles.Count;
-                StatusText = $"{_scannedFiles.Count} files found";
+                if (_pinnedStatus == null) StatusText = $"{_scannedFiles.Count} files found";
                 IsScanning = false;
                 // A throttled refresh queued by the last batch will run within 200ms anyway —
-                // don't do the full recomputation twice.
+                // don't do the full recomputation twice. (Not RefreshPreviewDeferred: this
+                // refresh isn't user-driven and must keep a pinned status.)
                 if (!_throttlePending)
-                    RefreshPreviewDeferred();
+                    _ = RefreshPreviewAsync();
             }
         }
     }
@@ -701,8 +716,10 @@ public class MainViewModel : ObservableObject
     private int _refreshVersion;
     private Task? _refreshTask;
 
+    /// <summary>Preview refresh after a user change (filters, method, template…).</summary>
     private void RefreshPreviewDeferred()
     {
+        _pinnedStatus = null;
         _ = RefreshPreviewAsync();
     }
 
@@ -881,7 +898,7 @@ public class MainViewModel : ObservableObject
         TotalFiles = result.Count;
         OnPropertyChanged(nameof(TypeCountText));
         OnPropertyChanged(nameof(RulesActiveText));
-        StatusText = $"{result.Count} of {_scannedFiles.Count} files will be organized";
+        StatusText = _pinnedStatus ?? $"{result.Count} of {_scannedFiles.Count} files will be organized";
         }
         catch (Exception)
         {
@@ -917,10 +934,10 @@ public class MainViewModel : ObservableObject
                     : $", {result.SkippedDuplicates} duplicates moved to {FileOrganizerService.DuplicatesFolderName}"
                 : "";
             var failInfo = result.FailedFiles > 0 ? $", {result.FailedFiles} failed" : "";
-            StatusText = $"Done! {movedCount} files {action}{dupeInfo}{failInfo}";
+            PinStatus($"Done! {movedCount} files {action}{dupeInfo}{failInfo}");
             OnPropertyChanged(nameof(CanUndo));
             RefreshHistory();
-            await RefreshFilesAsync();
+            await RefreshFilesAsync(keepStatus: true);
         }
         catch (Exception ex)
         {
@@ -953,12 +970,12 @@ public class MainViewModel : ObservableObject
         {
             var progressReporter = new Progress<int>(p => Progress = p);
             var result = await _organizer.UndoOperationAsync(operation, progressReporter);
-            StatusText = result.Failed == 0
+            PinStatus(result.Failed == 0
                 ? $"Undo complete! {result.Restored} files restored"
-                : $"Undo partially complete: {result.Restored} files restored, {result.Failed} could not be restored";
+                : $"Undo partially complete: {result.Restored} files restored, {result.Failed} could not be restored");
             OnPropertyChanged(nameof(CanUndo));
             RefreshHistory();
-            await RefreshFilesAsync();
+            await RefreshFilesAsync(keepStatus: true);
         }
         catch (Exception ex)
         {

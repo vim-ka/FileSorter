@@ -28,6 +28,12 @@ public class ScanTests
         }
     }
 
+    /// <summary>Runs UI actions immediately (no UI thread in tests).</summary>
+    private sealed class InlineDispatcher : IUiDispatcher
+    {
+        public Task InvokeAsync(Action action) { action(); return Task.CompletedTask; }
+    }
+
     private sealed class NoDialogs : IDialogService
     {
         public string? PickFolder(string title) => null;
@@ -82,6 +88,24 @@ public class ScanTests
         await WaitUntilAsync(() => !vm.IsScanning);
 
         Assert.Equal(3, vm.CurrentFolderFileCount);
+    }
+
+    [Fact]
+    public async Task OrganizeResultMessage_SurvivesTheRescanThatFollows()
+    {
+        var dir = TestData.NewTempDir("status");
+        TestData.WriteFile(dir, "a.txt");
+        TestData.WriteFile(dir, "b.txt");
+
+        var vm = new MainViewModel(new InlineDispatcher(), new NoDialogs(), new NoThumbnails(), new NoTheme());
+        vm.SourceFolder = dir;
+        await WaitUntilAsync(() => vm.StatusText.Contains("will be organized"));
+
+        vm.OrganizeCommand.Execute(null);
+        await WaitUntilAsync(() => !vm.IsOrganizing && !vm.IsScanning);
+        await Task.Delay(1000); // let the post-organize rescan and preview refresh settle
+
+        Assert.StartsWith("Done! 2 files moved", vm.StatusText);
     }
 
     [Fact]
