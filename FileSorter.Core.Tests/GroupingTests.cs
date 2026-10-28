@@ -6,12 +6,11 @@ namespace FileSorter.Core.Tests;
 
 public class GroupingTests
 {
-    private readonly FileOrganizerService _svc = new();
     private readonly List<FileCategory> _categories = FileCategoryService.GetDefaultCategories();
 
     private ObservableCollection<PreviewItem> Preview(
         List<FileItem> files, OrganizeMethod method, string? template = null) =>
-        _svc.GeneratePreview(files, new OrganizeRequest(@"C:\x", null, method, template, "yyyy-MM",
+        FileOrganizerService.GeneratePreview(files, new OrganizeRequest(@"C:\x", null, method, template, "yyyy-MM",
             _categories, null, [], UnmatchedFilesMode.OrganizeNormally, false, false));
 
     private static string RootKey(IEnumerable<PreviewItem> preview) =>

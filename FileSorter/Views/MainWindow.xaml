@@ -173,12 +173,20 @@
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
                                                     <ColumnDefinition Width="*" />
                                                     <ColumnDefinition Width="Auto" />
                                                     <ColumnDefinition Width="Auto" />
                                                 </Grid.ColumnDefinitions>
 
-                                                <TextBlock Grid.Column="0"
+                                                <!-- Checked folders are organized together, each with its own profile -->
+                                                <CheckBox Grid.Column="0"
+                                                          Style="{StaticResource ModernCheckBox}"
+                                                          IsChecked="{Binding IsChecked}"
+                                                          IsEnabled="{Binding DataContext.IsOrganizing, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource InverseBool}}"
+                                                          VerticalAlignment="Center" Margin="0,0,6,0"
+                                                          ToolTip="Include in multi-folder organize" />
+                                                <TextBlock Grid.Column="1"
                                                            Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets"
                                                            FontSize="14"
                                                            VerticalAlignment="Center" Margin="0,0,8,0">
@@ -193,7 +201,7 @@
                                                         </Style>
                                                     </TextBlock.Style>
                                                 </TextBlock>
-                                                <TextBlock Grid.Column="1"
+                                                <TextBlock Grid.Column="2"
                                                            Text="{Binding Name}"
                                                            FontSize="13"
                                                            Foreground="{StaticResource PrimaryTextBrush}"
@@ -210,13 +218,13 @@
                                                         </Style>
                                                     </TextBlock.Style>
                                                 </TextBlock>
-                                                <TextBlock Grid.Column="2"
+                                                <TextBlock Grid.Column="3"
                                                            Text="{Binding FileCount}"
                                                            FontSize="11"
                                                            Foreground="{StaticResource SecondaryTextBrush}"
                                                            VerticalAlignment="Center"
                                                            Margin="8,0,0,0" />
-                                                <Button Grid.Column="3"
+                                                <Button Grid.Column="4"
                                                         Command="{Binding DataContext.RemoveFolderCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                         CommandParameter="{Binding}"
                                                         Content="&#xE711;"
@@ -738,7 +746,7 @@
                             Style="{StaticResource PrimaryButton}"
                             Command="{Binding OrganizeCommand}"
                             Padding="28,10" Margin="0,0,4,0">
-                        <TextBlock Text="Organize" FontSize="14" />
+                        <TextBlock Text="{Binding OrganizeButtonText}" FontSize="14" />
                     </Button>
 
                     <Button Grid.Column="1"

@@ -17,8 +17,12 @@ public class MainViewModel : ObservableObject
     private readonly IDialogService _dialogs;
     private readonly IThumbnailProvider _thumbnails;
     private readonly IThemeService _theme;
-    private CancellationTokenSource? _scanCts;
     private bool _isScanning;
+
+    /// <summary>Scanned files of each organize target, keyed by <see cref="PathKey.Normalize"/>.</summary>
+    private readonly Dictionary<string, List<FileItem>> _scans = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Cancellation of each folder's running scan; a folder is scanning while it has an entry.</summary>
+    private readonly Dictionary<string, CancellationTokenSource> _scanCts = new(StringComparer.OrdinalIgnoreCase);
 
     private AppSettings _settings = new();
     private FolderViewModel? _selectedFolder;
@@ -63,16 +67,24 @@ public class MainViewModel : ObservableObject
 
     public bool HasSourceFolder => _selectedFolder != null;
 
-    public int CurrentFolderFileCount
+    public int CurrentFolderFileCount => _selectedFolder?.FileCount ?? 0;
+
+    /// <summary>
+    /// Folders the Organize button processes and the preview shows: the checked folders in list
+    /// order if any are checked (the selected folder only if it is checked too), else the selected folder.
+    /// </summary>
+    public IReadOnlyList<FolderViewModel> OrganizeTargets
     {
-        get => _selectedFolder?.FileCount ?? 0;
-        private set
+        get
         {
-            if (_selectedFolder == null || _selectedFolder.FileCount == value) return;
-            _selectedFolder.FileCount = value;
-            OnPropertyChanged();
+            var checkedFolders = Folders.Where(f => f.IsChecked).ToList();
+            if (checkedFolders.Count > 0) return checkedFolders;
+            return _selectedFolder != null ? [_selectedFolder] : [];
         }
     }
+
+    public string OrganizeButtonText =>
+        OrganizeTargets.Count is var n && n > 1 ? $"ORGANIZE {n} FOLDERS" : "ORGANIZE";
 
     /// <summary>Writes a per-folder option into the selected profile; true if it changed.</summary>
     private bool SetProfileValue<T>(T current, T value, Action<FolderProfile, T> assign,
@@ -125,8 +137,12 @@ public class MainViewModel : ObservableObject
         get => _profile.IncludeSubfolders;
         set
         {
-            if (SetProfileValue(_profile.IncludeSubfolders, value, (p, v) => p.IncludeSubfolders = v))
-                _ = RefreshFilesAsync();
+            if (SetProfileValue(_profile.IncludeSubfolders, value, (p, v) => p.IncludeSubfolders = v)
+                && _selectedFolder != null && OrganizeTargets.Contains(_selectedFolder))
+            {
+                _pinnedStatus = null;
+                _ = ScanFolderAsync(_selectedFolder);
+            }
         }
     }
 
@@ -277,7 +293,7 @@ public class MainViewModel : ObservableObject
     public ObservableCollection<RoutingRuleViewModel> Rules { get; } = [];
     public ObservableCollection<OrganizeOperation> HistoryItems { get; } = [];
 
-    public ICommand AddFolderCommand { get; }
+    public RelayCommand AddFolderCommand { get; }
     public ICommand SelectDestinationCommand { get; }
     public AsyncRelayCommand OrganizeCommand { get; }
     public AsyncRelayCommand UndoCommand { get; }
@@ -287,8 +303,8 @@ public class MainViewModel : ObservableObject
     public ICommand MoveRuleDownCommand { get; }
     public ICommand BrowseRuleDestinationCommand { get; }
     public ICommand SetMethodCommand { get; }
-    public ICommand SelectFolderCommand { get; }
-    public ICommand RemoveFolderCommand { get; }
+    public RelayCommand SelectFolderCommand { get; }
+    public RelayCommand RemoveFolderCommand { get; }
     public ICommand ToggleCategoryCommand { get; }
     public ICommand SetDateGranularityCommand { get; }
     public ICommand CloseDatePanelCommand { get; }
@@ -304,7 +320,7 @@ public class MainViewModel : ObservableObject
     public ICommand ToggleViewGroupCommand { get; }
     public AsyncRelayCommand UndoOperationCommand { get; }
 
-    private List<FileItem> _scannedFiles = [];
+
 
     public MainViewModel(IUiDispatcher dispatcher, IDialogService dialogs,
         IThumbnailProvider thumbnails, IThemeService theme)
@@ -314,7 +330,7 @@ public class MainViewModel : ObservableObject
         _thumbnails = thumbnails;
         _theme = theme;
 
-        AddFolderCommand = new RelayCommand(_ => AddFolder());
+        AddFolderCommand = new RelayCommand(_ => AddFolder(), _ => !IsOrganizing);
         SelectDestinationCommand = new RelayCommand(_ => SelectDestinationFolder());
         OrganizeCommand = new AsyncRelayCommand(_ => OrganizeAsync(), _ => CanOrganize());
         UndoCommand = new AsyncRelayCommand(_ => UndoLastAsync(), _ => !IsOrganizing && CanUndo);
@@ -348,12 +364,12 @@ public class MainViewModel : ObservableObject
         {
             if (p is FolderViewModel f)
                 SelectFolder(f);
-        });
+        }, _ => !IsOrganizing);
         RemoveFolderCommand = new RelayCommand(p =>
         {
             if (p is FolderViewModel f)
                 RemoveFolder(f);
-        });
+        }, _ => !IsOrganizing);
         SetDateGranularityCommand = new RelayCommand(p =>
         {
             if (p is DateGranularity g)
@@ -429,6 +445,9 @@ public class MainViewModel : ObservableObject
             UndoCommand.RaiseCanExecuteChanged();
             UndoOperationCommand.RaiseCanExecuteChanged();
             ClearHistoryCommand.RaiseCanExecuteChanged();
+            AddFolderCommand.RaiseCanExecuteChanged();
+            SelectFolderCommand.RaiseCanExecuteChanged();
+            RemoveFolderCommand.RaiseCanExecuteChanged();
         }
     }
 
@@ -467,7 +486,25 @@ public class MainViewModel : ObservableObject
     {
         var folder = new FolderViewModel(profile);
         folder.RefreshStatus(_settings.PauseAll);
+        folder.PropertyChanged += OnFolderPropertyChanged;
         return folder;
+    }
+
+    /// <summary>Checking a folder scans it into the preview; unchecking drops it.</summary>
+    private void OnFolderPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(FolderViewModel.IsChecked)) return;
+        OnTargetsChanged();
+        // A running organize works on what it captured; the rescan after it picks up the change
+        if (!IsOrganizing)
+            _ = SyncScansAsync();
+    }
+
+    private void OnTargetsChanged()
+    {
+        OnPropertyChanged(nameof(OrganizeTargets));
+        OnPropertyChanged(nameof(OrganizeButtonText));
+        OrganizeCommand.RaiseCanExecuteChanged();
     }
 
     private void LoadCategories()
@@ -549,6 +586,7 @@ public class MainViewModel : ObservableObject
 
     private void AddFolder()
     {
+        if (IsOrganizing) return;
         var path = _dialogs.PickFolder("Select Source Folder");
         if (path == null) return;
 
@@ -563,9 +601,16 @@ public class MainViewModel : ObservableObject
 
     private void RemoveFolder(FolderViewModel folder)
     {
+        if (IsOrganizing) return;
         if (ReferenceEquals(folder, _selectedFolder))
             SelectFolder(Folders.FirstOrDefault(f => !ReferenceEquals(f, folder)));
-        Folders.Remove(folder);
+        if (!Folders.Remove(folder)) return;
+        folder.PropertyChanged -= OnFolderPropertyChanged;
+        if (folder.IsChecked)
+        {
+            OnTargetsChanged();
+            _ = SyncScansAsync();
+        }
     }
 
     private static readonly string[] ProfileProperties =
@@ -577,10 +622,13 @@ public class MainViewModel : ObservableObject
         nameof(SkipDuplicates), nameof(Unmatched), nameof(RulesActiveText)
     ];
 
-    /// <summary>Shows the folder's profile in the UI and rescans; null clears the selection.</summary>
+    /// <summary>
+    /// Shows the folder's profile in the UI; null clears the selection. Without checked folders the
+    /// selected folder is the organize target, so it is rescanned. Ignored while organizing.
+    /// </summary>
     private void SelectFolder(FolderViewModel? folder)
     {
-        if (ReferenceEquals(folder, _selectedFolder)) return;
+        if (IsOrganizing || ReferenceEquals(folder, _selectedFolder)) return;
 
         if (_selectedFolder != null) _selectedFolder.IsSelected = false;
         _selectedFolder = folder;
@@ -601,8 +649,9 @@ public class MainViewModel : ObservableObject
 
         foreach (var name in ProfileProperties)
             OnPropertyChanged(name);
+        OnTargetsChanged();
 
-        _ = RefreshFilesAsync();
+        _ = SyncScansAsync();
     }
 
     private void SelectDestinationFolder()
@@ -612,8 +661,15 @@ public class MainViewModel : ObservableObject
             DestinationFolder = folder;
     }
 
+    private static string ScanKey(FolderViewModel folder) => PathKey.Normalize(folder.FullPath);
+
+    private List<FileItem>? ScannedFiles(FolderViewModel folder) =>
+        _scans.GetValueOrDefault(ScanKey(folder));
+
+    private int ScannedCount => _scans.Values.Sum(l => l.Count);
+
     private bool CanOrganize() =>
-        !string.IsNullOrEmpty(SourceFolder) && _scannedFiles.Count > 0 && !IsOrganizing;
+        !IsOrganizing && OrganizeTargets.Any(f => ScannedFiles(f) is { Count: > 0 });
 
     /// <summary>
     /// Result of the last organize/undo. While set, the rescan and preview refresh that follow
@@ -627,44 +683,98 @@ public class MainViewModel : ObservableObject
         StatusText = message;
     }
 
-    private async Task RefreshFilesAsync(bool keepStatus = false)
+    /// <summary>
+    /// Brings the per-folder scans in line with <see cref="OrganizeTargets"/>: folders that are no
+    /// longer targets are cancelled and dropped, new targets (or every target with
+    /// <paramref name="rescanAll"/>) are scanned, then the preview is refreshed.
+    /// Completes when the started scans complete.
+    /// </summary>
+    private async Task SyncScansAsync(bool keepStatus = false, bool rescanAll = false)
     {
         if (!keepStatus) _pinnedStatus = null;
 
-        // Cancel previous scan
-        _scanCts?.Cancel();
-        _scanCts?.Dispose();
-        _scanCts = new CancellationTokenSource();
-        var ct = _scanCts.Token;
-
-        if (string.IsNullOrEmpty(SourceFolder) || !Directory.Exists(SourceFolder))
+        var targets = OrganizeTargets;
+        var targetKeys = targets.Select(ScanKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var key in _scans.Keys.Where(k => !targetKeys.Contains(k)).ToList())
         {
-            _scannedFiles = [];
+            CancelScan(key);
+            _scans.Remove(key);
+        }
+        IsScanning = _scanCts.Count > 0;
+
+        if (!targets.Any(f => Directory.Exists(f.FullPath)))
+        {
+            foreach (var key in targetKeys)
+            {
+                CancelScan(key);
+                _scans.Remove(key);
+            }
             TotalFiles = 0;
             IsScanning = false;
+            OrganizeCommand.RaiseCanExecuteChanged();
             await RefreshPreviewAsync();
-            StatusText = "Select a folder to start";
+            StatusText = _pinnedStatus ?? "Select a folder to start";
             return;
         }
 
-        _scannedFiles = [];
-        TotalFiles = 0;
+        var toScan = targets.Where(f => rescanAll || !_scans.ContainsKey(ScanKey(f))).ToList();
+        if (toScan.Count == 0)
+        {
+            TotalFiles = ScannedCount;
+            OrganizeCommand.RaiseCanExecuteChanged();
+            await RefreshPreviewAsync();
+            return;
+        }
+
+        await Task.WhenAll(toScan.Select(ScanFolderAsync));
+    }
+
+    private void CancelScan(string key)
+    {
+        if (!_scanCts.Remove(key, out var cts)) return;
+        cts.Cancel();
+        cts.Dispose();
+    }
+
+    /// <summary>
+    /// (Re)scans one folder into its own list, non-recursive or recursive per its own profile.
+    /// Each scan has its own cancellation and list, so a batch posted by a cancelled or older scan
+    /// never lands in the current list.
+    /// </summary>
+    private async Task ScanFolderAsync(FolderViewModel folder)
+    {
+        var key = ScanKey(folder);
+        CancelScan(key);
+        var files = new List<FileItem>();
+        _scans[key] = files;
+
+        if (!Directory.Exists(folder.FullPath))
+        {
+            OnFolderScanned(folder, files);
+            IsScanning = _scanCts.Count > 0;
+            await RefreshPreviewAsync();
+            return;
+        }
+
+        var cts = new CancellationTokenSource();
+        _scanCts[key] = cts;
+        var ct = cts.Token;
+        TotalFiles = ScannedCount;
         IsScanning = true;
         if (_pinnedStatus == null) StatusText = "Scanning...";
 
         try
         {
-            await _organizer.ScanFolderAsync(SourceFolder, IncludeSubfolders, async batch =>
+            await _organizer.ScanFolderAsync(folder.FullPath, folder.Profile.IncludeSubfolders, async batch =>
             {
                 await _dispatcher.InvokeAsync(() =>
                 {
-                    // A batch posted before cancellation may land after a newer scan reset the list
+                    // A batch posted before cancellation may land after a newer scan replaced the list
                     if (ct.IsCancellationRequested) return;
 
-                    _scannedFiles.AddRange(batch);
-                    TotalFiles = _scannedFiles.Count;
-                    CurrentFolderFileCount = _scannedFiles.Count;
-                    if (_pinnedStatus == null) StatusText = $"Scanning... {_scannedFiles.Count} files found";
+                    files.AddRange(batch);
+                    OnFolderScanned(folder, files);
+                    if (_pinnedStatus == null) StatusText = $"Scanning... {ScannedCount} files found";
                     RefreshPreviewThrottled();
                 });
             }, 50, ct);
@@ -673,26 +783,39 @@ public class MainViewModel : ObservableObject
         {
             // Scan was cancelled
         }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            // The folder vanished or became unreadable mid-scan — keep what was found
+        }
         finally
         {
             if (!ct.IsCancellationRequested)
             {
-                TotalFiles = _scannedFiles.Count;
-                CurrentFolderFileCount = _scannedFiles.Count;
-                if (_pinnedStatus == null) StatusText = $"{_scannedFiles.Count} files found";
-                IsScanning = false;
-                // A throttled refresh queued by the last batch will run within 200ms anyway —
-                // don't do the full recomputation twice. (Not RefreshPreviewDeferred: this
-                // refresh isn't user-driven and must keep a pinned status.)
-                if (!_throttlePending)
-                    _ = RefreshPreviewAsync();
+                _scanCts.Remove(key);
+                cts.Dispose();
+                OnFolderScanned(folder, files);
+                if (_scanCts.Count == 0)
+                {
+                    if (_pinnedStatus == null) StatusText = $"{ScannedCount} files found";
+                    IsScanning = false;
+                    // A throttled refresh queued by the last batch will run within 200ms anyway —
+                    // don't do the full recomputation twice. (Not RefreshPreviewDeferred: this
+                    // refresh isn't user-driven and must keep a pinned status.)
+                    if (!_throttlePending)
+                        _ = RefreshPreviewAsync();
+                }
             }
         }
     }
 
-    /// <summary>Immutable snapshot of the selected folder's profile, safe to use from a background thread.</summary>
-    private OrganizeRequest CaptureRequest() =>
-        OrganizeRequest.FromProfile(_profile, Categories.Select(c => c.Category).ToList());
+    private void OnFolderScanned(FolderViewModel folder, List<FileItem> files)
+    {
+        folder.FileCount = files.Count;
+        if (ReferenceEquals(folder, _selectedFolder))
+            OnPropertyChanged(nameof(CurrentFolderFileCount));
+        TotalFiles = ScannedCount;
+        OrganizeCommand.RaiseCanExecuteChanged();
+    }
 
     private int _refreshVersion;
     private Task? _refreshTask;
@@ -747,7 +870,15 @@ public class MainViewModel : ObservableObject
         foreach (var item in PreviewItems)
             CollectExpandedNames(item, expandedNames);
 
-        if (_scannedFiles.Count == 0)
+        // Snapshot on UI thread (each target with its own profile) to avoid races with scan callbacks
+        var categories = Categories.Select(c => c.Category).ToList();
+        var sources = OrganizeTargets
+            .Select(f => new PreviewSource(f.Name, OrganizeRequest.FromProfile(f.Profile, categories),
+                new List<FileItem>(ScannedFiles(f) ?? [])))
+            .ToList();
+        int scanned = sources.Sum(s => s.Files.Count);
+
+        if (scanned == 0)
         {
             _thumbnails.CancelPending();
             PreviewItems.Clear();
@@ -757,96 +888,10 @@ public class MainViewModel : ObservableObject
             return;
         }
 
-        // Snapshot on UI thread to avoid race with scan callback
-        var files = new List<FileItem>(_scannedFiles);
-        var request = CaptureRequest();
-        var activeCategories = request.Categories;
-        var allowedCategories = request.AllowedCategories;
-        var template = request.Template;
-        var method = request.Method;
-        var destDisplay = DestinationDisplay;
         Func<ViewFileItem, object?> thumbnailProvider = RequestThumbnail;
 
         // Heavy work on background thread
-        var result = await Task.Run(() =>
-        {
-            var preview = _organizer.GeneratePreview(files, request);
-            var filteredFiles = new List<FileItem>();
-            foreach (var item in preview)
-                CollectFiles(item, filteredFiles);
-
-            // Build root
-            var root = new PreviewItem
-            {
-                Name = $"Destination \u2192 {destDisplay}",
-                IsFolder = true,
-                Icon = "\uE8B7"
-            };
-            foreach (var item in preview) root.Children.Add(item);
-
-            // Build stats
-            var stats = new List<CategoryStats>();
-            int total = filteredFiles.Count;
-            double currentAngle = 0;
-            int colorIndex = 0;
-
-            if (method == OrganizeMethod.ByType && template == null)
-            {
-                var allCatCounts = new Dictionary<string, int>();
-                foreach (var file in files)
-                {
-                    var catName = FileCategoryService.GetCategoryName(file.Extension, activeCategories);
-                    allCatCounts.TryGetValue(catName, out var count);
-                    allCatCounts[catName] = count + 1;
-                }
-
-                foreach (var kv in allCatCounts.OrderBy(k => k.Key))
-                {
-                    bool isSelected = allowedCategories == null || allowedCategories.Contains(kv.Key);
-                    int groupCount = isSelected
-                        ? filteredFiles.Count(f => FileCategoryService.GetCategoryName(f.Extension, activeCategories) == kv.Key)
-                        : 0;
-                    double pct = isSelected && total > 0 ? (double)groupCount / total : 0;
-                    double sweep = pct * 360;
-                    var color = CategoryColors[colorIndex % CategoryColors.Length];
-
-                    stats.Add(new CategoryStats
-                    {
-                        Name = kv.Key, Count = kv.Value, Color = color,
-                        Percentage = pct * 100, StartAngle = currentAngle,
-                        SweepAngle = sweep, IsSelected = isSelected
-                    });
-
-                    if (isSelected) currentAngle += sweep;
-                    colorIndex++;
-                }
-            }
-            else
-            {
-                foreach (var group in preview.OrderBy(g => g.Name))
-                {
-                    int groupFileCount = CountFiles(group);
-                    double pct = total > 0 ? (double)groupFileCount / total : 0;
-                    double sweep = pct * 360;
-                    var color = CategoryColors[colorIndex % CategoryColors.Length];
-
-                    stats.Add(new CategoryStats
-                    {
-                        Name = group.Name, Count = groupFileCount, Color = color,
-                        Percentage = pct * 100, StartAngle = currentAngle,
-                        SweepAngle = sweep, IsSelected = true
-                    });
-
-                    currentAngle += sweep;
-                    colorIndex++;
-                }
-            }
-
-            // Build view file groups (same grouping as tree)
-            var viewGroups = BuildViewFileGroups(preview, activeCategories, thumbnailProvider);
-
-            return (root, stats, filteredFiles.Count, viewGroups);
-        });
+        var result = await Task.Run(() => PreviewBuilder.Build(sources, CategoryColors, thumbnailProvider));
 
         // Update UI
         PreviewItems.Clear();
@@ -859,13 +904,16 @@ public class MainViewModel : ObservableObject
         ViewFileGroups.Clear();
         _thumbnails.CancelPending();
 
-        RestoreExpandedState(result.root, expandedNames);
-        PreviewItems.Add(result.root);
+        foreach (var root in result.Roots)
+        {
+            RestoreExpandedState(root, expandedNames);
+            PreviewItems.Add(root);
+        }
 
-        foreach (var stat in result.stats)
+        foreach (var stat in result.Stats)
             CategoryStatsItems.Add(stat);
 
-        foreach (var vg in result.viewGroups)
+        foreach (var vg in result.ViewGroups)
         {
             if (viewExpandedStates.TryGetValue(vg.Key, out var wasExpanded))
                 vg.IsExpanded = wasExpanded;
@@ -875,10 +923,10 @@ public class MainViewModel : ObservableObject
         // Build flat list for virtualized ListBox; thumbnails load lazily for visible rows
         RebuildFlatViewItems();
 
-        TotalFiles = result.Count;
+        TotalFiles = result.FileCount;
         OnPropertyChanged(nameof(TypeCountText));
         OnPropertyChanged(nameof(RulesActiveText));
-        StatusText = _pinnedStatus ?? $"{result.Count} of {_scannedFiles.Count} files will be organized";
+        StatusText = _pinnedStatus ?? $"{result.FileCount} of {scanned} files will be organized";
         }
         catch (Exception)
         {
@@ -886,33 +934,63 @@ public class MainViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Organizes every target in list order, each with its own profile, as one run. A folder that
+    /// fails doesn't stop the others; the status reports each folder.
+    /// </summary>
     private async Task OrganizeAsync()
     {
+        if (IsOrganizing) return;
+
+        // Everything is captured before the first await: the user may flip options, check or
+        // select other folders while files are being moved.
+        var categories = Categories.Select(c => c.Category).ToList();
+        var jobs = OrganizeTargets
+            .Select(f => (f.Name, Request: OrganizeRequest.FromProfile(f.Profile, categories),
+                Files: (IReadOnlyList<FileItem>)(ScannedFiles(f)?.ToList() ?? [])))
+            .ToList();
+        if (jobs.Count == 0) return;
+        var run = RunContext.NewManual();
+
         IsOrganizing = true;
         Progress = 0;
         StatusText = "Organizing files...";
 
         try
         {
-            // Captured before the await: the user may flip options while files are being moved
-            var request = CaptureRequest();
-            var copyMode = request.CopyMode;
-            var progressReporter = new Progress<int>(p => Progress = p);
+            var parts = new List<string>();
+            for (int i = 0; i < jobs.Count; i++)
+            {
+                var (name, request, files) = jobs[i];
+                var index = i;
+                var progressReporter = new Progress<int>(p => Progress = (index * 100 + p) / jobs.Count);
+                try
+                {
+                    if (!Directory.Exists(request.SourceFolder))
+                        throw new DirectoryNotFoundException("folder not found");
 
-            var result = await _organizer.OrganizeAsync(_scannedFiles.ToList(), request, RunContext.NewManual(), progressReporter);
+                    var result = await _organizer.OrganizeAsync(files, request, run, progressReporter);
+                    var summary = Summary(result, request.CopyMode);
+                    parts.Add(jobs.Count == 1 ? $"Done! {summary.Moved} files {summary.Details}" : $"{name}: {summary.Moved} {summary.Details}");
+                }
+                catch (Exception ex)
+                {
+                    if (jobs.Count == 1)
+                    {
+                        parts.Add($"Error: {ex.Message}");
+                        _dialogs.ShowError("Error", ex.Message);
+                    }
+                    else
+                    {
+                        parts.Add($"{name}: error: {ex.Message}");
+                    }
+                }
+            }
 
-            var action = copyMode ? "copied" : "moved";
-            var movedCount = result.Moves.Count(m => !m.WasDuplicate);
-            var dupeInfo = result.SkippedDuplicates > 0
-                ? copyMode
-                    ? $", {result.SkippedDuplicates} duplicates skipped"
-                    : $", {result.SkippedDuplicates} duplicates moved to {FileOrganizerService.DuplicatesFolderName}"
-                : "";
-            var failInfo = result.FailedFiles > 0 ? $", {result.FailedFiles} failed" : "";
-            PinStatus($"Done! {movedCount} files {action}{dupeInfo}{failInfo}");
+            PinStatus(string.Join("; ", parts));
             OnPropertyChanged(nameof(CanUndo));
             RefreshHistory();
-            await RefreshFilesAsync(keepStatus: true);
+            await SyncScansAsync(keepStatus: true, rescanAll: true);
         }
         catch (Exception ex)
         {
@@ -926,32 +1004,70 @@ public class MainViewModel : ObservableObject
         }
     }
 
-    private Task UndoLastAsync() => UndoOperationsAsync(_organizer.LastUndoableRun.Reverse().ToList());
+    /// <summary>"12" and "moved, 2 duplicates skipped, 1 failed" for the status bar.</summary>
+    private static (int Moved, string Details) Summary(OrganizeOperation result, bool copyMode)
+    {
+        var action = copyMode ? "copied" : "moved";
+        var dupeInfo = result.SkippedDuplicates > 0
+            ? copyMode
+                ? $", {result.SkippedDuplicates} duplicates skipped"
+                : $", {result.SkippedDuplicates} duplicates moved to {FileOrganizerService.DuplicatesFolderName}"
+            : "";
+        var failInfo = result.FailedFiles > 0 ? $", {result.FailedFiles} failed" : "";
+        return (result.Moves.Count(m => !m.WasDuplicate), $"{action}{dupeInfo}{failInfo}");
+    }
+
+    /// <summary>
+    /// Undoes the whole last run. Undoing a later operation of the run can make an earlier one
+    /// undoable (the later one had moved its outputs), so the run's undoable operations are
+    /// re-evaluated until none is left.
+    /// </summary>
+    private Task UndoLastAsync()
+    {
+        var last = _organizer.LastUndoableRun;
+        if (last.Count == 0) return Task.CompletedTask;
+        var runId = last[0].RunId;
+        if (runId == Guid.Empty) return UndoOperationsAsync(() => last);
+
+        return UndoOperationsAsync(() => _organizer.History
+            .Where(op => op.RunId == runId && _organizer.CanUndoOperation(op))
+            .Reverse()
+            .ToList());
+    }
 
     private Task UndoOperationAsync(OrganizeOperation? operation) =>
-        operation == null ? Task.CompletedTask : UndoOperationsAsync([operation]);
+        operation == null ? Task.CompletedTask : UndoOperationsAsync(() => [operation]);
 
-    /// <summary>Undoes the given operations in the order supplied (callers pass newest first).</summary>
-    private async Task UndoOperationsAsync(IReadOnlyList<OrganizeOperation> operations)
+    /// <summary>
+    /// Undoes the operations <paramref name="next"/> returns (newest first), asking again after each
+    /// pass until it returns nothing new; each operation is attempted at most once.
+    /// </summary>
+    private async Task UndoOperationsAsync(Func<IReadOnlyList<OrganizeOperation>> next)
     {
-        if (operations.Count == 0 || !_organizer.CanUndoOperation(operations[0])) return;
+        var first = next();
+        if (first.Count == 0 || !_organizer.CanUndoOperation(first[0])) return;
 
         IsOrganizing = true;
         StatusText = "Undoing operation...";
         Progress = 0;
 
         var undone = new List<OrganizeOperation>();
+        var attempted = new HashSet<OrganizeOperation>();
         try
         {
             int restored = 0, failed = 0;
-            foreach (var operation in operations)
+            for (var batch = first; batch.Count > 0; batch = next().Where(op => !attempted.Contains(op)).ToList())
             {
-                if (!_organizer.CanUndoOperation(operation)) continue;
-                var progressReporter = new Progress<int>(p => Progress = p);
-                var result = await _organizer.UndoOperationAsync(operation, progressReporter);
-                restored += result.Restored;
-                failed += result.Failed;
-                if (result.Restored > 0 || operation.IsUndone) undone.Add(operation);
+                foreach (var operation in batch)
+                {
+                    attempted.Add(operation);
+                    if (!_organizer.CanUndoOperation(operation)) continue;
+                    var progressReporter = new Progress<int>(p => Progress = p);
+                    var result = await _organizer.UndoOperationAsync(operation, progressReporter);
+                    restored += result.Restored;
+                    failed += result.Failed;
+                    if (result.Restored > 0 || operation.IsUndone) undone.Add(operation);
+                }
             }
 
             PinStatus(failed == 0
@@ -959,7 +1075,7 @@ public class MainViewModel : ObservableObject
                 : $"Undo partially complete: {restored} files restored, {failed} could not be restored");
             OnPropertyChanged(nameof(CanUndo));
             RefreshHistory();
-            await RefreshFilesAsync(keepStatus: true);
+            await SyncScansAsync(keepStatus: true, rescanAll: true);
         }
         catch (Exception ex)
         {
@@ -971,22 +1087,6 @@ public class MainViewModel : ObservableObject
             Progress = 0;
             if (undone.Count > 0) OperationsUndone?.Invoke(undone);
         }
-    }
-
-    private static void CollectFiles(PreviewItem item, List<FileItem> result)
-    {
-        if (item.File is { } file) result.Add(file);
-        foreach (var child in item.Children)
-            CollectFiles(child, result);
-    }
-
-    private static int CountFiles(PreviewItem item)
-    {
-        if (!item.IsFolder) return 1;
-        int count = 0;
-        foreach (var child in item.Children)
-            count += CountFiles(child);
-        return count;
     }
 
     private static void CollectExpandedNames(PreviewItem item, HashSet<string> names, string path = "")
@@ -1007,96 +1107,8 @@ public class MainViewModel : ObservableObject
             RestoreExpandedState(child, collapsedNames, fullPath);
     }
 
-    private static List<ViewFileGroup> BuildViewFileGroups(
-        ObservableCollection<PreviewItem> preview, IReadOnlyList<FileCategory> categories,
-        Func<ViewFileItem, object?> thumbnailProvider)
-    {
-        var result = new List<ViewFileGroup>();
-
-        foreach (var group in preview)
-        {
-            var files = new List<ViewFileItem>();
-            FlattenPreviewGroup(group, files, categories, thumbnailProvider);
-            result.Add(new ViewFileGroup
-            {
-                Key = group.Name,
-                HeaderText = $"{group.Name}  ({files.Count})",
-                FileCount = files.Count,
-                Files = files
-            });
-        }
-
-        return result;
-    }
-
-    private static void FlattenPreviewGroup(PreviewItem item, List<ViewFileItem> result,
-        IReadOnlyList<FileCategory> categories, Func<ViewFileItem, object?> thumbnailProvider)
-    {
-        foreach (var child in item.Children)
-        {
-            if (child.IsFolder)
-            {
-                FlattenPreviewGroup(child, result, categories, thumbnailProvider);
-            }
-            else if (child.File is { } file)
-            {
-                var catName = FileCategoryService.GetCategoryName(file.Extension, categories);
-
-                result.Add(new ViewFileItem
-                {
-                    FileName = file.FileName,
-                    Extension = file.Extension,
-                    Icon = GetCategoryIcon(catName),
-                    SizeText = FormatSize(file.Size),
-                    DateText = file.DateModified.ToString("MMM dd, yyyy HH:mm"),
-                    FullPath = file.FullPath,
-                    DateModified = file.DateModified,
-                    CategoryName = catName,
-                    HasThumbnailSupport = HasThumbnailSupport(file.Extension),
-                    ThumbnailProvider = thumbnailProvider
-                });
-            }
-        }
-    }
-
     private object? RequestThumbnail(ViewFileItem item) =>
         _thumbnails.GetOrRequest(item.FullPath, item.DateModified, ThumbnailSize, image => item.Thumbnail = image);
-
-    private static string GetCategoryIcon(string categoryName) => categoryName switch
-    {
-        "Documents" => "\uE8A5",
-        "Images" => "\uE8B9",
-        "Videos" => "\uE8B2",
-        "Music" => "\uE8D6",
-        "Archives" => "\uE8C8",
-        "Code" => "\uE943",
-        "Executables" => "\uE756",
-        "Fonts" => "\uE8D2",
-        _ => "\uE7C3"
-    };
-
-    private static readonly HashSet<string> ThumbnailExtensions =
-    [
-        // Images
-        ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".ico", ".tiff", ".tif", ".webp", ".heic", ".heif", ".svg",
-        // Documents
-        ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp", ".rtf",
-        // Videos
-        ".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".mpg", ".mpeg",
-        // Other
-        ".psd", ".ai", ".eps", ".html", ".htm"
-    ];
-
-    private static bool HasThumbnailSupport(string ext) =>
-        ThumbnailExtensions.Contains(ext.ToLowerInvariant());
-
-    private static string FormatSize(long size) => size switch
-    {
-        < 1024 => $"{size} B",
-        < 1024 * 1024 => $"{size / 1024.0:F1} KB",
-        < 1024L * 1024 * 1024 => $"{size / (1024.0 * 1024):F1} MB",
-        _ => $"{size / (1024.0 * 1024 * 1024):F2} GB"
-    };
 
     private void SetPreviewExpanded(bool expanded)
     {

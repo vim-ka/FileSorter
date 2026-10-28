@@ -205,7 +205,7 @@ public class FileOrganizerService
             : [folder];
     }
 
-    public ObservableCollection<PreviewItem> GeneratePreview(IReadOnlyList<FileItem> files, OrganizeRequest request)
+    public static ObservableCollection<PreviewItem> GeneratePreview(IReadOnlyList<FileItem> files, OrganizeRequest request)
     {
         var preview = new ObservableCollection<PreviewItem>();
 
