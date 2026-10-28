@@ -17,7 +17,7 @@ public class HistoryTests
     {
         var path = TestData.WriteFile(dir, name);
         var request = OrganizeRequest.FromProfile(FolderProfile.CreateDefault(dir), _categories);
-        return svc.OrganizeAsync([TestData.ItemFromDisk(path)], request);
+        return svc.OrganizeAsync([TestData.ItemFromDisk(path)], request, RunContext.NewManual());
     }
 
     [Fact]
@@ -34,7 +34,7 @@ public class HistoryTests
 
         Assert.Equal(1, result.Failed);
         Assert.True(newer.IsUndone);
-        Assert.Same(older, svc.LastUndoableOperation);
+        Assert.Equal([older], svc.LastUndoableRun);
     }
 
     [Fact]

@@ -217,7 +217,10 @@ public class MainViewModel : ObservableObject
         _ => $"{CategoryStatsItems.Count} Groups"
     };
 
-    public bool CanUndo => _organizer.LastUndoableOperation != null;
+    public bool CanUndo => _organizer.LastUndoableRun.Count > 0;
+
+    /// <summary>Raised after an undo with the operations that were actually undone.</summary>
+    public event Action<IReadOnlyList<OrganizeOperation>>? OperationsUndone;
 
     public bool IsDarkTheme
     {
@@ -896,7 +899,7 @@ public class MainViewModel : ObservableObject
             var copyMode = request.CopyMode;
             var progressReporter = new Progress<int>(p => Progress = p);
 
-            var result = await _organizer.OrganizeAsync(_scannedFiles.ToList(), request, progressReporter);
+            var result = await _organizer.OrganizeAsync(_scannedFiles.ToList(), request, RunContext.NewManual(), progressReporter);
 
             var action = copyMode ? "copied" : "moved";
             var movedCount = result.Moves.Count(m => !m.WasDuplicate);
@@ -923,28 +926,37 @@ public class MainViewModel : ObservableObject
         }
     }
 
-    private async Task UndoLastAsync()
-    {
-        var lastUndoable = _organizer.LastUndoableOperation;
-        if (lastUndoable != null)
-            await UndoOperationAsync(lastUndoable);
-    }
+    private Task UndoLastAsync() => UndoOperationsAsync(_organizer.LastUndoableRun.Reverse().ToList());
 
-    private async Task UndoOperationAsync(OrganizeOperation? operation)
+    private Task UndoOperationAsync(OrganizeOperation? operation) =>
+        operation == null ? Task.CompletedTask : UndoOperationsAsync([operation]);
+
+    /// <summary>Undoes the given operations in the order supplied (callers pass newest first).</summary>
+    private async Task UndoOperationsAsync(IReadOnlyList<OrganizeOperation> operations)
     {
-        if (operation == null || !_organizer.CanUndoOperation(operation)) return;
+        if (operations.Count == 0 || !_organizer.CanUndoOperation(operations[0])) return;
 
         IsOrganizing = true;
         StatusText = "Undoing operation...";
         Progress = 0;
 
+        var undone = new List<OrganizeOperation>();
         try
         {
-            var progressReporter = new Progress<int>(p => Progress = p);
-            var result = await _organizer.UndoOperationAsync(operation, progressReporter);
-            PinStatus(result.Failed == 0
-                ? $"Undo complete! {result.Restored} files restored"
-                : $"Undo partially complete: {result.Restored} files restored, {result.Failed} could not be restored");
+            int restored = 0, failed = 0;
+            foreach (var operation in operations)
+            {
+                if (!_organizer.CanUndoOperation(operation)) continue;
+                var progressReporter = new Progress<int>(p => Progress = p);
+                var result = await _organizer.UndoOperationAsync(operation, progressReporter);
+                restored += result.Restored;
+                failed += result.Failed;
+                if (result.Restored > 0 || operation.IsUndone) undone.Add(operation);
+            }
+
+            PinStatus(failed == 0
+                ? $"Undo complete! {restored} files restored"
+                : $"Undo partially complete: {restored} files restored, {failed} could not be restored");
             OnPropertyChanged(nameof(CanUndo));
             RefreshHistory();
             await RefreshFilesAsync(keepStatus: true);
@@ -957,6 +969,7 @@ public class MainViewModel : ObservableObject
         {
             IsOrganizing = false;
             Progress = 0;
+            if (undone.Count > 0) OperationsUndone?.Invoke(undone);
         }
     }
 

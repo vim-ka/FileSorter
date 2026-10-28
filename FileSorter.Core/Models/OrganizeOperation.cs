@@ -22,4 +22,15 @@ public class OrganizeOperation
     public int SkippedDuplicates { get; set; }
     public int FailedFiles { get; set; }
     public bool IsUndone { get; set; }
+
+    /// <summary>Operations of one organize run (possibly several folders) share a RunId; Guid.Empty (legacy entries) is a run of its own.</summary>
+    public Guid RunId { get; set; }
+    public string SourceFolder { get; set; } = string.Empty;
+    public bool IsAuto { get; set; }
+}
+
+public readonly record struct RunContext(Guid RunId, bool IsAuto)
+{
+    public static RunContext NewManual() => new(Guid.NewGuid(), false);
+    public static RunContext NewAuto() => new(Guid.NewGuid(), true);
 }

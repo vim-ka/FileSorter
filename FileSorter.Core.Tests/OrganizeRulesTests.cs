@@ -33,7 +33,7 @@ public class OrganizeRulesTests : TempDataDirTest
             PlannerTests.Rule("Texts", RuleField.Extension, RuleOperator.Is, "txt"));
         var svc = new FileOrganizerService();
 
-        var op = await svc.OrganizeAsync([TestData.ItemFromDisk(clip), TestData.ItemFromDisk(notes)], request);
+        var op = await svc.OrganizeAsync([TestData.ItemFromDisk(clip), TestData.ItemFromDisk(notes)], request, RunContext.NewManual());
 
         Assert.True(File.Exists(Path.Combine(fullPathTarget, "clip.mp4")));
         Assert.True(File.Exists(Path.Combine(_source, "Texts", "notes.txt")));
@@ -58,7 +58,7 @@ public class OrganizeRulesTests : TempDataDirTest
         var request = Request(PlannerTests.Rule($@"{letter}:\NoSuchDrive\X", RuleField.Extension, RuleOperator.Is, "mp4"));
         var svc = new FileOrganizerService();
 
-        var op = await svc.OrganizeAsync([TestData.ItemFromDisk(clip), TestData.ItemFromDisk(notes)], request);
+        var op = await svc.OrganizeAsync([TestData.ItemFromDisk(clip), TestData.ItemFromDisk(notes)], request, RunContext.NewManual());
 
         Assert.Equal(1, op.FailedFiles);
         Assert.True(File.Exists(clip));
@@ -75,7 +75,7 @@ public class OrganizeRulesTests : TempDataDirTest
         var request = Request(PlannerTests.Rule("Movies", RuleField.Extension, RuleOperator.Is, "mp4"));
         var svc = new FileOrganizerService();
 
-        var op = await svc.OrganizeAsync([TestData.ItemFromDisk(clip)], request);
+        var op = await svc.OrganizeAsync([TestData.ItemFromDisk(clip)], request, RunContext.NewManual());
 
         Assert.Empty(op.Moves);
         Assert.True(File.Exists(clip));

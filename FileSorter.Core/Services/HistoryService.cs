@@ -6,8 +6,25 @@ public static class HistoryService
 {
     private const string HistoryFile = "history.json";
 
-    /// <summary>Oldest operations beyond this limit are dropped from history.</summary>
-    public const int MaxOperations = 50;
+    /// <summary>Oldest manual operations beyond this limit are dropped from history.</summary>
+    public const int MaxManualOperations = 50;
+
+    /// <summary>Oldest automatic operations beyond this limit are dropped; counted separately from manual ones.</summary>
+    public const int MaxAutoOperations = 200;
+
+    /// <summary>Keeps the newest manual and the newest automatic operations, preserving chronological order.</summary>
+    public static void Trim(List<OrganizeOperation> history)
+    {
+        var manualExcess = history.Count(o => !o.IsAuto) - MaxManualOperations;
+        var autoExcess = history.Count(o => o.IsAuto) - MaxAutoOperations;
+        if (manualExcess <= 0 && autoExcess <= 0) return;
+
+        history.RemoveAll(o =>
+        {
+            if (o.IsAuto) return autoExcess-- > 0;
+            return manualExcess-- > 0;
+        });
+    }
 
     private static readonly SemaphoreSlim SaveLock = new(1, 1);
 

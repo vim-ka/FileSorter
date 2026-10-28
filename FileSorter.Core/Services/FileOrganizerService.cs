@@ -63,7 +63,20 @@ public class FileOrganizerService
             || !operation.Moves.Any(m => !m.IsUndone && laterSources.Contains(m.DestinationPath));
     }
 
-    public OrganizeOperation? LastUndoableOperation => _history.LastOrDefault(CanUndoOperation);
+    /// <summary>
+    /// The still-undoable operations of the most recent run that has any (oldest first).
+    /// Legacy operations without a RunId each form a run of their own. Empty when nothing can be undone.
+    /// </summary>
+    public IReadOnlyList<OrganizeOperation> LastUndoableRun
+    {
+        get
+        {
+            var last = _history.LastOrDefault(CanUndoOperation);
+            if (last == null) return [];
+            if (last.RunId == Guid.Empty) return [last];
+            return _history.Where(op => op.RunId == last.RunId && CanUndoOperation(op)).ToList();
+        }
+    }
 
     /// <summary>
     /// Scans folder in background. Calls onBatch on UI thread for each batch, awaiting completion
@@ -238,13 +251,18 @@ public class FileOrganizerService
     }
 
     public async Task<OrganizeOperation> OrganizeAsync(
-        IReadOnlyList<FileItem> files, OrganizeRequest request, IProgress<int>? progress = null)
+        IReadOnlyList<FileItem> files, OrganizeRequest request, RunContext run, IProgress<int>? progress = null)
     {
         await EnsureHistoryLoadedAsync();
 
         var copyMode = request.CopyMode;
         var duplicatesFolder = Path.Combine(request.TargetFolder, DuplicatesFolderName);
-        var operation = new OrganizeOperation();
+        var operation = new OrganizeOperation
+        {
+            RunId = run.RunId,
+            IsAuto = run.IsAuto,
+            SourceFolder = request.SourceFolder
+        };
         var duplicates = request.SkipDuplicates ? new DuplicateIndex() : null;
 
         try
@@ -296,7 +314,8 @@ public class FileOrganizerService
             // so it can still be undone.
             var verb = copyMode ? "Copied" : "Moved";
             var by = request.Template != null && request.Template.Contains('#') ? "template" : request.Method.ToString();
-            operation.Description = $"{verb} {operation.Moves.Count(m => !m.WasDuplicate)} files by {by}";
+            var folderName = FolderProfile.CreateDefault(request.SourceFolder).Name;
+            operation.Description = $"{(run.IsAuto ? "Auto · " : "")}{folderName}: {verb} {operation.Moves.Count(m => !m.WasDuplicate)} files by {by}";
 
             if (operation.Moves.Count > 0)
             {
@@ -444,12 +463,7 @@ public class FileOrganizerService
         return UndoOutcome.Restored;
     }
 
-    private void TrimHistory()
-    {
-        var excess = _history.Count - HistoryService.MaxOperations;
-        if (excess > 0)
-            _history.RemoveRange(0, excess);
-    }
+    private void TrimHistory() => HistoryService.Trim(_history);
 
     /// <summary>Groups files by the request's method or template; keys are relative paths using '/'.</summary>
     private static Dictionary<string, List<FileItem>> GroupFiles(List<FileItem> files, OrganizeRequest request)
