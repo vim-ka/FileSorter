@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using FileSorter.Models;
 using FileSorter.Services;
 
@@ -8,6 +9,11 @@ public class GroupingTests
     private readonly FileOrganizerService _svc = new();
     private readonly List<FileCategory> _categories = FileCategoryService.GetDefaultCategories();
 
+    private ObservableCollection<PreviewItem> Preview(
+        List<FileItem> files, OrganizeMethod method, string? template = null) =>
+        _svc.GeneratePreview(files, new OrganizeRequest(@"C:\x", null, method, template, "yyyy-MM",
+            _categories, null, [], UnmatchedFilesMode.OrganizeNormally, false, false));
+
     private static string RootKey(IEnumerable<PreviewItem> preview) =>
         Assert.Single(preview).Name;
 
@@ -16,7 +22,7 @@ public class GroupingTests
     {
         var file = TestData.Item(@"C:\x\notes.txt", new DateTime(2024, 5, 1));
 
-        var preview = _svc.GeneratePreview([file], OrganizeMethod.ByType, _categories, template: "#datetaken");
+        var preview = Preview([file], OrganizeMethod.ByType, template: "#datetaken");
 
         Assert.Equal("2024-05", RootKey(preview));
     }
@@ -26,7 +32,7 @@ public class GroupingTests
     {
         var file = TestData.Item(@"C:\x\notes.txt", new DateTime(2024, 5, 1));
 
-        var preview = _svc.GeneratePreview([file], OrganizeMethod.ByType, _categories, template: "#date/#datetaken");
+        var preview = Preview([file], OrganizeMethod.ByType, template: "#date/#datetaken");
 
         var root = Assert.Single(preview);
         Assert.Equal("2024-05-01", root.Name);
@@ -42,7 +48,7 @@ public class GroupingTests
             TestData.Item(@"C:\x\photo-2.jpg")
         };
 
-        var preview = _svc.GeneratePreview(files, OrganizeMethod.ByName, _categories);
+        var preview = Preview(files, OrganizeMethod.ByName);
 
         var root = Assert.Single(preview);
         Assert.Equal("Photo", root.Name);
@@ -54,7 +60,7 @@ public class GroupingTests
     {
         var file = TestData.Item(@"C:\x\hello-world-1.jpg");
 
-        var preview = _svc.GeneratePreview([file], OrganizeMethod.ByType, _categories, template: "#prefix/#ext");
+        var preview = Preview([file], OrganizeMethod.ByType, template: "#prefix/#ext");
 
         var root = Assert.Single(preview);
         Assert.Equal("hello-world", root.Name);
@@ -62,15 +68,15 @@ public class GroupingTests
     }
 
     [Fact]
-    public void GeneratePreview_DoesNotDropFilesOfDeselectedCategories()
+    public void GeneratePreview_WithoutAllowedCategories_DoesNotDropAnyCategory()
     {
-        // Category filtering is the ViewModel's job (it honours ApplyFilters);
-        // the service must group whatever it is given.
+        // AllowedCategories == null (ApplyFilters off): every file is grouped,
+        // whatever FileCategory.IsSelected says.
         var images = _categories.First(c => c.Name == "Images");
         images.IsSelected = false;
         var file = TestData.Item(@"C:\x\photo.png");
 
-        var preview = _svc.GeneratePreview([file], OrganizeMethod.ByType, _categories);
+        var preview = Preview([file], OrganizeMethod.ByType);
 
         Assert.Equal("Images", RootKey(preview));
     }

@@ -650,36 +650,9 @@ public class MainViewModel : ObservableObject
         }
     }
 
-    /// <summary>Immutable copy of the filter settings, safe to use from a background thread.</summary>
-    private sealed record FilterState(
-        bool ApplyFilters, List<FileCategory> Categories, HashSet<string> SelectedCategoryNames,
-        bool ApplyRules, bool RulesAndMode, List<FilterRuleSnapshot> Rules);
-
-    private FilterState CaptureFilterState() => new(
-        ApplyFilters,
-        Categories.Select(c => c.Category).ToList(),
-        Categories.Where(c => c.IsSelected).Select(c => c.Name).ToHashSet(),
-        ApplyRules,
-        RulesAndMode,
-        Rules.Select(r => new FilterRuleSnapshot(r.Field, r.Operator, r.Value)).ToList());
-
-    private static List<FileItem> FilterFiles(IEnumerable<FileItem> files, FilterState filter)
-    {
-        if (filter.ApplyFilters)
-        {
-            files = files.Where(f =>
-                filter.SelectedCategoryNames.Contains(FileCategoryService.GetCategoryName(f.Extension, filter.Categories)));
-        }
-
-        if (filter.ApplyRules && filter.Rules.Count > 0)
-        {
-            files = filter.RulesAndMode
-                ? files.Where(f => filter.Rules.All(r => r.Matches(f)))
-                : files.Where(f => filter.Rules.Any(r => r.Matches(f)));
-        }
-
-        return files.ToList();
-    }
+    /// <summary>Immutable snapshot of the selected folder's profile, safe to use from a background thread.</summary>
+    private OrganizeRequest CaptureRequest() =>
+        OrganizeRequest.FromProfile(_profile, Categories.Select(c => c.Category).ToList());
 
     private int _refreshVersion;
     private Task? _refreshTask;
@@ -746,22 +719,21 @@ public class MainViewModel : ObservableObject
 
         // Snapshot on UI thread to avoid race with scan callback
         var files = new List<FileItem>(_scannedFiles);
-        var filter = CaptureFilterState();
-        var activeCategories = filter.Categories;
-        var selectedCategoryNames = filter.SelectedCategoryNames;
-        var applyFilters = filter.ApplyFilters;
-        var template = string.IsNullOrWhiteSpace(DestinationSubfolderPattern) ? null : DestinationSubfolderPattern;
-        var dateFormat = GetDateFormat();
-        var method = SelectedMethod;
+        var request = CaptureRequest();
+        var activeCategories = request.Categories;
+        var allowedCategories = request.AllowedCategories;
+        var template = request.Template;
+        var method = request.Method;
         var destDisplay = DestinationDisplay;
         Func<ViewFileItem, object?> thumbnailProvider = RequestThumbnail;
 
         // Heavy work on background thread
         var result = await Task.Run(() =>
         {
-            var filteredFiles = FilterFiles(files, filter);
-
-            var preview = _organizer.GeneratePreview(filteredFiles, method, activeCategories, template, dateFormat);
+            var preview = _organizer.GeneratePreview(files, request);
+            var filteredFiles = new List<FileItem>();
+            foreach (var item in preview)
+                CollectFiles(item, filteredFiles);
 
             // Build root
             var root = new PreviewItem
@@ -790,7 +762,7 @@ public class MainViewModel : ObservableObject
 
                 foreach (var kv in allCatCounts.OrderBy(k => k.Key))
                 {
-                    bool isSelected = !applyFilters || selectedCategoryNames.Contains(kv.Key);
+                    bool isSelected = allowedCategories == null || allowedCategories.Contains(kv.Key);
                     int groupCount = isSelected
                         ? filteredFiles.Count(f => FileCategoryService.GetCategoryName(f.Extension, activeCategories) == kv.Key)
                         : 0;
@@ -882,22 +854,17 @@ public class MainViewModel : ObservableObject
 
         try
         {
-            var filter = CaptureFilterState();
-            var filteredFiles = FilterFiles(_scannedFiles.ToList(), filter);
-            var activeCategories = filter.Categories;
+            // Captured before the await: the user may flip options while files are being moved
+            var request = CaptureRequest();
+            var copyMode = request.CopyMode;
             var progressReporter = new Progress<int>(p => Progress = p);
-            var template = string.IsNullOrWhiteSpace(DestinationSubfolderPattern) ? null : DestinationSubfolderPattern;
-            var dateFormat = GetDateFormat();
 
-            var result = await _organizer.OrganizeAsync(
-                filteredFiles, SourceFolder, DestinationFolder, SelectedMethod,
-                CopyMode, activeCategories, progressReporter, template, dateFormat,
-                SkipDuplicates);
+            var result = await _organizer.OrganizeAsync(_scannedFiles.ToList(), request, progressReporter);
 
-            var action = CopyMode ? "copied" : "moved";
+            var action = copyMode ? "copied" : "moved";
             var movedCount = result.Moves.Count(m => !m.WasDuplicate);
             var dupeInfo = result.SkippedDuplicates > 0
-                ? CopyMode
+                ? copyMode
                     ? $", {result.SkippedDuplicates} duplicates skipped"
                     : $", {result.SkippedDuplicates} duplicates moved to {FileOrganizerService.DuplicatesFolderName}"
                 : "";
@@ -956,13 +923,12 @@ public class MainViewModel : ObservableObject
         }
     }
 
-    private string GetDateFormat() => SelectedDateGranularity switch
+    private static void CollectFiles(PreviewItem item, List<FileItem> result)
     {
-        DateGranularity.Year => "yyyy",
-        DateGranularity.Month => "yyyy-MM",
-        DateGranularity.Day => "yyyy-MM-dd",
-        _ => "yyyy-MM"
-    };
+        if (item.File is { } file) result.Add(file);
+        foreach (var child in item.Children)
+            CollectFiles(child, result);
+    }
 
     private static int CountFiles(PreviewItem item)
     {
@@ -992,7 +958,7 @@ public class MainViewModel : ObservableObject
     }
 
     private static List<ViewFileGroup> BuildViewFileGroups(
-        ObservableCollection<PreviewItem> preview, List<FileCategory> categories,
+        ObservableCollection<PreviewItem> preview, IReadOnlyList<FileCategory> categories,
         Func<ViewFileItem, object?> thumbnailProvider)
     {
         var result = new List<ViewFileGroup>();
@@ -1014,7 +980,7 @@ public class MainViewModel : ObservableObject
     }
 
     private static void FlattenPreviewGroup(PreviewItem item, List<ViewFileItem> result,
-        List<FileCategory> categories, Func<ViewFileItem, object?> thumbnailProvider)
+        IReadOnlyList<FileCategory> categories, Func<ViewFileItem, object?> thumbnailProvider)
     {
         foreach (var child in item.Children)
         {

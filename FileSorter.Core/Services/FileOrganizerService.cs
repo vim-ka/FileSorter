@@ -13,7 +13,6 @@ public class FileOrganizerService
     public const string DuplicatesFolderName = "_duplicates";
 
     private readonly List<OrganizeOperation> _history = [];
-    private List<FileCategory> _categories = FileCategoryService.GetDefaultCategories();
 
     public IReadOnlyList<OrganizeOperation> History => _history;
 
@@ -65,11 +64,6 @@ public class FileOrganizerService
     }
 
     public OrganizeOperation? LastUndoableOperation => _history.LastOrDefault(CanUndoOperation);
-
-    public void SetCategories(List<FileCategory> categories)
-    {
-        _categories = categories;
-    }
 
     /// <summary>
     /// Scans folder in background. Calls onBatch on UI thread for each batch, awaiting completion
@@ -128,19 +122,73 @@ public class FileOrganizerService
         }, ct);
     }
 
-    public ObservableCollection<PreviewItem> GeneratePreview(
-        List<FileItem> files, OrganizeMethod method, List<FileCategory> activeCategories,
-        string? template = null, string? dateFormat = null)
+    /// <summary>
+    /// Decides where every file goes: category filter (if enabled) → first matching routing rule →
+    /// otherwise, depending on <see cref="OrganizeRequest.Unmatched"/>, the method/template grouping
+    /// or nowhere (left in place). Groups are merged by folder path, ignoring case.
+    /// Pure apart from lazy EXIF loading for ByDateTaken / #datetaken — call off the UI thread.
+    /// </summary>
+    public static IReadOnlyList<PlannedGroup> Plan(IReadOnlyList<FileItem> files, OrganizeRequest request)
+    {
+        var target = request.TargetFolder;
+        var groups = new Dictionary<string, (IReadOnlyList<string> Segments, List<FileItem> Files)>(
+            StringComparer.OrdinalIgnoreCase);
+        var order = new List<string>();
+        var unmatched = new List<FileItem>();
+
+        void Add(string folderPath, IReadOnlyList<string> segments, IEnumerable<FileItem> items)
+        {
+            if (!groups.TryGetValue(folderPath, out var group))
+            {
+                groups[folderPath] = group = (segments, []);
+                order.Add(folderPath);
+            }
+            group.Files.AddRange(items);
+        }
+
+        foreach (var file in files)
+        {
+            if (request.AllowedCategories is { } allowed
+                && !allowed.Contains(FileCategoryService.GetCategoryName(file.Extension, request.Categories)))
+                continue;
+
+            var rule = request.Rules.FirstOrDefault(r => r.Matches(file));
+            if (rule != null)
+            {
+                var folder = rule.ResolveFolder(target);
+                Add(folder, RuleDisplaySegments(folder, target), [file]);
+            }
+            else if (request.Unmatched == UnmatchedFilesMode.OrganizeNormally)
+            {
+                unmatched.Add(file);
+            }
+        }
+
+        foreach (var (key, items) in GroupFiles(unmatched, request))
+        {
+            var folder = Path.Combine(target, key.Replace('/', Path.DirectorySeparatorChar));
+            Add(folder, key.Split('/', '\\'), items);
+        }
+
+        return order.Select(path => new PlannedGroup(path, groups[path].Segments, groups[path].Files)).ToList();
+    }
+
+    /// <summary>Relative folders under the target; a folder elsewhere is shown as one full-path node.</summary>
+    private static IReadOnlyList<string> RuleDisplaySegments(string folder, string target) =>
+        PathKey.IsUnder(folder, target)
+            ? Path.GetRelativePath(target, folder).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            : [folder];
+
+    public ObservableCollection<PreviewItem> GeneratePreview(IReadOnlyList<FileItem> files, OrganizeRequest request)
     {
         var preview = new ObservableCollection<PreviewItem>();
-        var grouped = GroupFiles(files, method, activeCategories, template, dateFormat);
 
-        foreach (var group in grouped.OrderBy(g => g.Key))
+        foreach (var group in Plan(files, request).OrderBy(g => string.Join('/', g.DisplaySegments)))
         {
-            var pathParts = group.Key.Split('/', '\\');
+            var pathParts = group.DisplaySegments;
             var currentChildren = preview;
 
-            for (int i = 0; i < pathParts.Length; i++)
+            for (int i = 0; i < pathParts.Count; i++)
             {
                 var existing = currentChildren.FirstOrDefault(p => p.IsFolder && string.Equals(p.Name, pathParts[i], StringComparison.OrdinalIgnoreCase));
                 if (existing == null)
@@ -154,10 +202,10 @@ public class FileOrganizerService
                     currentChildren.Add(existing);
                 }
 
-                if (i == pathParts.Length - 1)
+                if (i == pathParts.Count - 1)
                 {
-                    existing.FileCount += group.Value.Count;
-                    foreach (var file in group.Value.OrderBy(f => f.FileName))
+                    existing.FileCount += group.Files.Count;
+                    foreach (var file in group.Files.OrderBy(f => f.FileName))
                     {
                         existing.Children.Add(new PreviewItem
                         {
@@ -177,37 +225,27 @@ public class FileOrganizerService
     }
 
     public async Task<OrganizeOperation> OrganizeAsync(
-        List<FileItem> files,
-        string sourceFolder,
-        string? destinationFolder,
-        OrganizeMethod method,
-        bool copyMode,
-        List<FileCategory> activeCategories,
-        IProgress<int>? progress = null,
-        string? template = null,
-        string? dateFormat = null,
-        bool skipDuplicates = false)
+        IReadOnlyList<FileItem> files, OrganizeRequest request, IProgress<int>? progress = null)
     {
         await EnsureHistoryLoadedAsync();
 
-        var targetFolder = destinationFolder ?? sourceFolder;
-        var duplicatesFolder = Path.Combine(targetFolder, DuplicatesFolderName);
+        var copyMode = request.CopyMode;
+        var duplicatesFolder = Path.Combine(request.TargetFolder, DuplicatesFolderName);
         var operation = new OrganizeOperation();
-        var duplicates = skipDuplicates ? new DuplicateIndex() : null;
+        var duplicates = request.SkipDuplicates ? new DuplicateIndex() : null;
 
         try
         {
             await Task.Run(() =>
             {
-                // Grouping may read EXIF (ByDateTaken / #datetaken) — keep it off the UI thread
-                var grouped = GroupFiles(files, method, activeCategories, template, dateFormat);
+                // Planning may read EXIF (ByDateTaken / #datetaken) — keep it off the UI thread
+                var plan = Plan(files, request);
                 int processed = 0;
-                int total = grouped.Sum(g => g.Value.Count);
+                int total = plan.Sum(g => g.Files.Count);
 
-                foreach (var group in grouped)
+                foreach (var group in plan)
                 {
-                    var normalizedKey = group.Key.Replace('/', Path.DirectorySeparatorChar);
-                    var folderPath = Path.Combine(targetFolder, normalizedKey);
+                    var folderPath = group.FolderPath;
 
                     try
                     {
@@ -217,13 +255,13 @@ public class FileOrganizerService
                     catch
                     {
                         // Can't create or read the target folder — every file of the group fails
-                        operation.FailedFiles += group.Value.Count;
-                        processed += group.Value.Count;
+                        operation.FailedFiles += group.Files.Count;
+                        processed += group.Files.Count;
                         progress?.Report(processed * 100 / Math.Max(total, 1));
                         continue;
                     }
 
-                    foreach (var file in group.Value)
+                    foreach (var file in group.Files)
                     {
                         processed++;
                         try
@@ -244,7 +282,7 @@ public class FileOrganizerService
             // Record whatever was done, even if something unexpected aborted the loop,
             // so it can still be undone.
             var verb = copyMode ? "Copied" : "Moved";
-            var by = template != null && template.Contains('#') ? "template" : method.ToString();
+            var by = request.Template != null && request.Template.Contains('#') ? "template" : request.Method.ToString();
             operation.Description = $"{verb} {operation.Moves.Count(m => !m.WasDuplicate)} files by {by}";
 
             if (operation.Moves.Count > 0)
@@ -400,36 +438,34 @@ public class FileOrganizerService
             _history.RemoveRange(0, excess);
     }
 
-    private Dictionary<string, List<FileItem>> GroupFiles(
-        List<FileItem> files, OrganizeMethod method, List<FileCategory> activeCategories,
-        string? template = null, string? dateFormat = null)
+    /// <summary>Groups files by the request's method or template; keys are relative paths using '/'.</summary>
+    private static Dictionary<string, List<FileItem>> GroupFiles(List<FileItem> files, OrganizeRequest request)
     {
-        // Category/rule filtering is the caller's responsibility (MainViewModel.FilterFiles honours
-        // the ApplyFilters toggle); every file passed in is grouped.
+        var template = request.Template;
 
         // If template contains tokens, use template-based grouping
         if (!string.IsNullOrWhiteSpace(template) && template.Contains('#'))
-            return GroupByTemplate(files, template, activeCategories);
+            return GroupByTemplate(files, template, request.Categories);
 
-        return method switch
+        return request.Method switch
         {
-            OrganizeMethod.ByType => GroupByType(files),
+            OrganizeMethod.ByType => GroupByType(files, request.Categories),
             OrganizeMethod.ByExtension => GroupByExtension(files),
-            OrganizeMethod.ByDate => GroupByDate(files, dateFormat ?? "yyyy-MM"),
+            OrganizeMethod.ByDate => GroupByDate(files, request.DateFormat),
             OrganizeMethod.ByAlphabet => GroupByAlphabet(files),
             OrganizeMethod.BySize => GroupBySize(files),
-            OrganizeMethod.ByDateTaken => GroupByDateTaken(files, dateFormat ?? "yyyy-MM"),
+            OrganizeMethod.ByDateTaken => GroupByDateTaken(files, request.DateFormat),
             OrganizeMethod.ByName => GroupByName(files),
-            _ => GroupByType(files)
+            _ => GroupByType(files, request.Categories)
         };
     }
 
-    private Dictionary<string, List<FileItem>> GroupByType(List<FileItem> files)
+    private static Dictionary<string, List<FileItem>> GroupByType(List<FileItem> files, IReadOnlyList<FileCategory> categories)
     {
         var result = new Dictionary<string, List<FileItem>>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in files)
         {
-            var category = FileCategoryService.GetCategoryName(file.Extension, _categories);
+            var category = FileCategoryService.GetCategoryName(file.Extension, categories);
             if (!result.ContainsKey(category))
                 result[category] = [];
             result[category].Add(file);
@@ -512,7 +548,7 @@ public class FileOrganizerService
         return result;
     }
 
-    private Dictionary<string, List<FileItem>> GroupByDateTaken(List<FileItem> files, string format)
+    private static Dictionary<string, List<FileItem>> GroupByDateTaken(List<FileItem> files, string format)
     {
         EnsureDateTakenLoaded(files);
         var result = new Dictionary<string, List<FileItem>>(StringComparer.OrdinalIgnoreCase);
@@ -541,8 +577,8 @@ public class FileOrganizerService
         }
     }
 
-    private Dictionary<string, List<FileItem>> GroupByTemplate(
-        List<FileItem> files, string template, List<FileCategory> categories)
+    private static Dictionary<string, List<FileItem>> GroupByTemplate(
+        List<FileItem> files, string template, IReadOnlyList<FileCategory> categories)
     {
         var result = new Dictionary<string, List<FileItem>>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in files)
@@ -555,7 +591,7 @@ public class FileOrganizerService
         return result;
     }
 
-    private static string ExpandTemplate(string template, FileItem file, List<FileCategory> categories)
+    private static string ExpandTemplate(string template, FileItem file, IReadOnlyList<FileCategory> categories)
     {
         var result = template;
         result = result.Replace("#type", FileCategoryService.GetCategoryName(file.Extension, categories));

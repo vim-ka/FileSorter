@@ -62,7 +62,7 @@ public static class FileCategoryService
         }
     ];
 
-    public static string GetCategoryName(string extension, List<FileCategory> categories)
+    public static string GetCategoryName(string extension, IReadOnlyList<FileCategory> categories)
     {
         foreach (var category in categories)
         {

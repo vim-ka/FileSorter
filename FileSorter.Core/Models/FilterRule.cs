@@ -26,6 +26,8 @@ public class FilterRule
     public RuleField Field { get; set; } = RuleField.Name;
     public RuleOperator Operator { get; set; } = RuleOperator.Contains;
     public string Value { get; set; } = string.Empty;
+
+    public FilterRuleSnapshot Snapshot() => new(Field, Operator, Value);
 }
 
 public record FilterRuleSnapshot(RuleField Field, RuleOperator Operator, string Value)

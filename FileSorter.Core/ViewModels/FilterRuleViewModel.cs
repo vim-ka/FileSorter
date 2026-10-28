@@ -50,11 +50,4 @@ public class FilterRuleViewModel : ObservableObject
     {
         RemoveCommand = new RelayCommand(_ => RemoveRequested?.Invoke());
     }
-
-    public FilterRule ToModel() => new()
-    {
-        Field = Field,
-        Operator = Operator,
-        Value = Value
-    };
 }

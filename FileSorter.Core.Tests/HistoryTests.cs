@@ -16,7 +16,8 @@ public class HistoryTests
     private Task<OrganizeOperation> MoveOneFileAsync(FileOrganizerService svc, string dir, string name)
     {
         var path = TestData.WriteFile(dir, name);
-        return svc.OrganizeAsync([TestData.ItemFromDisk(path)], dir, null, OrganizeMethod.ByType, false, _categories);
+        var request = OrganizeRequest.FromProfile(FolderProfile.CreateDefault(dir), _categories);
+        return svc.OrganizeAsync([TestData.ItemFromDisk(path)], request);
     }
 
     [Fact]
