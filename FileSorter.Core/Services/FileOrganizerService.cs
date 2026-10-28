@@ -142,7 +142,7 @@ public class FileOrganizerService
 
             for (int i = 0; i < pathParts.Length; i++)
             {
-                var existing = currentChildren.FirstOrDefault(p => p.Name == pathParts[i] && p.IsFolder);
+                var existing = currentChildren.FirstOrDefault(p => p.IsFolder && string.Equals(p.Name, pathParts[i], StringComparison.OrdinalIgnoreCase));
                 if (existing == null)
                 {
                     existing = new PreviewItem
@@ -419,13 +419,14 @@ public class FileOrganizerService
             OrganizeMethod.ByAlphabet => GroupByAlphabet(files),
             OrganizeMethod.BySize => GroupBySize(files),
             OrganizeMethod.ByDateTaken => GroupByDateTaken(files, dateFormat ?? "yyyy-MM"),
+            OrganizeMethod.ByName => GroupByName(files),
             _ => GroupByType(files)
         };
     }
 
     private Dictionary<string, List<FileItem>> GroupByType(List<FileItem> files)
     {
-        var result = new Dictionary<string, List<FileItem>>();
+        var result = new Dictionary<string, List<FileItem>>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in files)
         {
             var category = FileCategoryService.GetCategoryName(file.Extension, _categories);
@@ -438,7 +439,7 @@ public class FileOrganizerService
 
     private static Dictionary<string, List<FileItem>> GroupByExtension(List<FileItem> files)
     {
-        var result = new Dictionary<string, List<FileItem>>();
+        var result = new Dictionary<string, List<FileItem>>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in files)
         {
             var ext = string.IsNullOrEmpty(file.Extension) ? "No Extension" : file.Extension.TrimStart('.').ToUpperInvariant();
@@ -451,7 +452,7 @@ public class FileOrganizerService
 
     private static Dictionary<string, List<FileItem>> GroupByDate(List<FileItem> files, string format)
     {
-        var result = new Dictionary<string, List<FileItem>>();
+        var result = new Dictionary<string, List<FileItem>>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in files)
         {
             var key = file.DateModified.ToString(format);
@@ -464,7 +465,7 @@ public class FileOrganizerService
 
     private static Dictionary<string, List<FileItem>> GroupByAlphabet(List<FileItem> files)
     {
-        var result = new Dictionary<string, List<FileItem>>();
+        var result = new Dictionary<string, List<FileItem>>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in files)
         {
             var firstChar = string.IsNullOrEmpty(file.FileName) ? "#" : file.FileName[0].ToString().ToUpperInvariant();
@@ -477,9 +478,22 @@ public class FileOrganizerService
         return result;
     }
 
+    private static Dictionary<string, List<FileItem>> GroupByName(List<FileItem> files)
+    {
+        var result = new Dictionary<string, List<FileItem>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in files)
+        {
+            var key = NamePrefix.Get(file.FileName);
+            if (!result.ContainsKey(key))
+                result[key] = [];
+            result[key].Add(file);
+        }
+        return result;
+    }
+
     private static Dictionary<string, List<FileItem>> GroupBySize(List<FileItem> files)
     {
-        var result = new Dictionary<string, List<FileItem>>();
+        var result = new Dictionary<string, List<FileItem>>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in files)
         {
             var key = file.Size switch
@@ -501,7 +515,7 @@ public class FileOrganizerService
     private Dictionary<string, List<FileItem>> GroupByDateTaken(List<FileItem> files, string format)
     {
         EnsureDateTakenLoaded(files);
-        var result = new Dictionary<string, List<FileItem>>();
+        var result = new Dictionary<string, List<FileItem>>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in files)
         {
             var key = file.DateTaken?.ToString(format) ?? "Unknown Date";
@@ -530,7 +544,7 @@ public class FileOrganizerService
     private Dictionary<string, List<FileItem>> GroupByTemplate(
         List<FileItem> files, string template, List<FileCategory> categories)
     {
-        var result = new Dictionary<string, List<FileItem>>();
+        var result = new Dictionary<string, List<FileItem>>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in files)
         {
             var key = ExpandTemplate(template, file, categories);
@@ -560,6 +574,7 @@ public class FileOrganizerService
             result = result.Replace("#datetaken", (file.DateTaken ?? file.DateModified).ToString("yyyy-MM"));
         }
         result = result.Replace("#date", file.DateModified.ToString("yyyy-MM-dd"));
+        result = result.Replace("#prefix", NamePrefix.Get(file.FileName));
         result = result.Replace("#alpha", GetAlphaKey(file.FileName));
         result = result.Replace("#size", GetSizeKey(file.Size));
 

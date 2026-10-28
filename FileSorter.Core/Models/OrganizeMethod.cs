@@ -7,5 +7,6 @@ public enum OrganizeMethod
     ByDate,
     ByAlphabet,
     BySize,
-    ByDateTaken
+    ByDateTaken,
+    ByName
 }

@@ -249,6 +249,7 @@ public class MainViewModel : ObservableObject
         OrganizeMethod.ByAlphabet => $"{CategoryStatsItems.Count} Letters",
         OrganizeMethod.BySize => $"{CategoryStatsItems.Count} Sizes",
         OrganizeMethod.ByDateTaken => $"{CategoryStatsItems.Count} Dates",
+        OrganizeMethod.ByName => $"{CategoryStatsItems.Count} Names",
         _ => $"{CategoryStatsItems.Count} Groups"
     };
 

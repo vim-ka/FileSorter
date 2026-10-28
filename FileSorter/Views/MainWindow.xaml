@@ -515,6 +515,23 @@
                                 </Style>
                             </Button.Style>
                         </Button>
+                        <Button Content="Name" Margin="2,0"
+                                Command="{Binding SetMethodCommand}"
+                                CommandParameter="{x:Static models:OrganizeMethod.ByName}">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                    <Style.Triggers>
+                                        <DataTrigger Value="True">
+                                            <DataTrigger.Binding>
+                                                <Binding Path="SelectedMethod" Converter="{StaticResource MethodMatch}" ConverterParameter="ByName" />
+                                            </DataTrigger.Binding>
+                                            <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+                                            <Setter Property="Foreground" Value="White" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
                     </StackPanel>
                 </Border>
 
