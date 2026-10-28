@@ -45,22 +45,26 @@ public class CopyJournal
         }
     }
 
-    /// <summary>Serializes and writes on a background thread, under a lock shared with other saves.</summary>
+    /// <summary>
+    /// Serializes and writes on a background thread, under a lock shared with other saves. The
+    /// snapshot is taken after the lock is acquired, so saves finishing out of order can't
+    /// overwrite newer entries with an older snapshot.
+    /// </summary>
     public async Task SaveAsync()
     {
-        List<Entry> snapshot;
-        lock (_gate)
-            snapshot = _entries.Values.Select(e => new Entry
-            {
-                SourceFolder = e.SourceFolder,
-                Path = e.Path,
-                Size = e.Size,
-                LastWriteTimeUtc = e.LastWriteTimeUtc
-            }).ToList();
-
         await SaveLock.WaitAsync();
         try
         {
+            List<Entry> snapshot;
+            lock (_gate)
+                snapshot = _entries.Values.Select(e => new Entry
+                {
+                    SourceFolder = e.SourceFolder,
+                    Path = e.Path,
+                    Size = e.Size,
+                    LastWriteTimeUtc = e.LastWriteTimeUtc
+                }).ToList();
+
             await Task.Run(() => JsonFileStore.Save(JournalFile, snapshot));
         }
         finally
