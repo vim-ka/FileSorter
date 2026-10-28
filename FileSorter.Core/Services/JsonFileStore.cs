@@ -52,15 +52,36 @@ internal static class JsonFileStore
     {
         try
         {
-            Directory.CreateDirectory(DataDir);
-            var path = Path.Combine(DataDir, fileName);
-            var tmp = path + ".tmp";
-            File.WriteAllText(tmp, JsonSerializer.Serialize(value, Options));
-            File.Move(tmp, path, overwrite: true);
+            WriteText(PathOf(fileName), Serialize(value));
         }
         catch
         {
             // Ignore save errors
+        }
+    }
+
+    /// <summary>Full path of a data file in the current <see cref="DataDir"/>.</summary>
+    public static string PathOf(string fileName) => Path.Combine(DataDir, fileName);
+
+    public static string Serialize<T>(T value) => JsonSerializer.Serialize(value, Options);
+
+    /// <summary>
+    /// Atomic write (temp file + replace). Never throws; false when it failed, e.g. the target was
+    /// briefly open in another process (a reader, an antivirus scan) — the caller may retry.
+    /// </summary>
+    public static bool WriteText(string path, string text)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var tmp = path + ".tmp";
+            File.WriteAllText(tmp, text);
+            File.Move(tmp, path, overwrite: true);
+            return true;
+        }
+        catch
+        {
+            return false;
         }
     }
 }

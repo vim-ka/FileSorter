@@ -8,15 +8,27 @@ using FileSorter.Services;
 
 namespace FileSorter.ViewModels;
 
-public class MainViewModel : ObservableObject
+public partial class MainViewModel : ObservableObject
 {
     private const int ThumbnailSize = 48;
 
-    private readonly FileOrganizerService _organizer = new();
+    private const string NotificationTitle = "FileSorter";
+
+    private readonly FileOrganizerService _organizer = new(new CopyJournal());
     private readonly IUiDispatcher _dispatcher;
     private readonly IDialogService _dialogs;
     private readonly IThumbnailProvider _thumbnails;
     private readonly IThemeService _theme;
+    private readonly INotificationService _notifications;
+    private readonly IAutostartService _autostart;
+
+    /// <summary>One organize or undo per folder at a time — shared by manual runs and the auto engine.</summary>
+    private readonly FolderGate _gate = new();
+    private readonly AutoOrganizeOptions _autoOptions = AutoOrganizeOptions.Default;
+    private readonly AutoOrganizeEngine _engine;
+    private readonly NotificationThrottle _notificationThrottle;
+    private bool _notificationLoopRunning;
+    private bool _isShutDown;
     private bool _isScanning;
 
     /// <summary>Scanned files of each organize target, keyed by <see cref="PathKey.Normalize"/>.</summary>
@@ -102,7 +114,10 @@ public class MainViewModel : ObservableObject
         set
         {
             if (SetProfileValue(_profile.DestinationFolder, value, (p, v) => p.DestinationFolder = v))
+            {
                 OnPropertyChanged(nameof(DestinationDisplay));
+                RaiseAutoWarnings();
+            }
         }
     }
 
@@ -319,24 +334,37 @@ public class MainViewModel : ObservableObject
     public ICommand CollapseAllViewCommand { get; }
     public ICommand ToggleViewGroupCommand { get; }
     public AsyncRelayCommand UndoOperationCommand { get; }
-
+    public ICommand ResumeAutoCommand { get; }
+    public ICommand TogglePauseAllCommand { get; }
 
 
     public MainViewModel(IUiDispatcher dispatcher, IDialogService dialogs,
-        IThumbnailProvider thumbnails, IThemeService theme)
+        IThumbnailProvider thumbnails, IThemeService theme,
+        INotificationService notifications, IAutostartService autostart)
     {
         _dispatcher = dispatcher;
         _dialogs = dialogs;
         _thumbnails = thumbnails;
         _theme = theme;
+        _notifications = notifications;
+        _autostart = autostart;
+        _notificationThrottle = new NotificationThrottle(_autoOptions.NotificationInterval);
+        _engine = new AutoOrganizeEngine(_organizer, _organizer.Journal, _gate, dispatcher, _autoOptions);
+        _engine.RunCompleted += OnAutoRunCompleted;
+        _gate.Changed += _ => OnGateChanged();
+        OperationsUndone += PauseAutoOfUndoneFolders;
 
         AddFolderCommand = new RelayCommand(_ => AddFolder(), _ => !IsOrganizing);
         SelectDestinationCommand = new RelayCommand(_ => SelectDestinationFolder());
         OrganizeCommand = new AsyncRelayCommand(_ => OrganizeAsync(), _ => CanOrganize());
-        UndoCommand = new AsyncRelayCommand(_ => UndoLastAsync(), _ => !IsOrganizing && CanUndo);
+        UndoCommand = new AsyncRelayCommand(_ => UndoLastAsync(),
+            _ => !IsOrganizing && CanUndo && !_organizer.LastUndoableRun.Any(op => IsFolderBusy(op.SourceFolder)));
         UndoOperationCommand = new AsyncRelayCommand(
             p => UndoOperationAsync(p as OrganizeOperation),
-            p => !IsOrganizing && p is OrganizeOperation op && _organizer.CanUndoOperation(op));
+            p => !IsOrganizing && p is OrganizeOperation op && _organizer.CanUndoOperation(op)
+                 && !IsFolderBusy(op.SourceFolder));
+        ResumeAutoCommand = new RelayCommand(p => ResumeAuto(p as FolderViewModel ?? _selectedFolder));
+        TogglePauseAllCommand = new RelayCommand(_ => PauseAll = !PauseAll);
         AddRuleCommand = new RelayCommand(_ => AddRule());
         RemoveRuleCommand = new RelayCommand(p =>
         {
@@ -432,6 +460,8 @@ public class MainViewModel : ObservableObject
         LoadSettings();
         PropertyChanged += OnOwnPropertyChanged;
         _ = LoadHistoryAsync();
+        // The first configuration also checks each active folder once (what arrived while not running)
+        ConfigureEngine();
     }
 
     // Commands don't get automatic requery outside WPF, so raise CanExecuteChanged
@@ -466,10 +496,23 @@ public class MainViewModel : ObservableObject
 
     public void SaveSettings()
     {
+        UpdateSettings();
+        SettingsService.Save(_settings);
+    }
+
+    /// <summary>Persists without blocking the UI thread: folder list changes, auto settings and pauses.</summary>
+    private void SaveSettingsInBackground()
+    {
+        if (_isShutDown) return;
+        UpdateSettings();
+        _ = SettingsService.SaveInBackground(_settings);
+    }
+
+    private void UpdateSettings()
+    {
         _settings.IsDarkTheme = IsDarkTheme;
         _settings.SelectedViewMode = SelectedViewMode;
         _settings.Folders = Folders.Select(f => f.Profile).ToList();
-        SettingsService.Save(_settings);
     }
 
     private void LoadSettings()
@@ -581,6 +624,7 @@ public class MainViewModel : ObservableObject
     private void OnRulesChanged()
     {
         OnPropertyChanged(nameof(RulesActiveText));
+        RaiseAutoWarnings();
         RefreshPreviewDeferred();
     }
 
@@ -595,6 +639,7 @@ public class MainViewModel : ObservableObject
         {
             folder = CreateFolderViewModel(FolderProfile.CreateDefault(path));
             Folders.Insert(0, folder);
+            SaveSettingsInBackground();
         }
         SelectFolder(folder);
     }
@@ -611,6 +656,10 @@ public class MainViewModel : ObservableObject
             OnTargetsChanged();
             _ = SyncScansAsync();
         }
+        if (folder.Profile.Auto.Enabled) ConfigureEngine();
+        SaveSettingsInBackground();
+        OnPropertyChanged(nameof(KeepRunningInBackground));
+        RaiseAutoWarnings();
     }
 
     private static readonly string[] ProfileProperties =
@@ -649,6 +698,7 @@ public class MainViewModel : ObservableObject
 
         foreach (var name in ProfileProperties)
             OnPropertyChanged(name);
+        RaiseAutoProperties();
         OnTargetsChanged();
 
         _ = SyncScansAsync();
@@ -669,7 +719,8 @@ public class MainViewModel : ObservableObject
     private int ScannedCount => _scans.Values.Sum(l => l.Count);
 
     private bool CanOrganize() =>
-        !IsOrganizing && OrganizeTargets.Any(f => ScannedFiles(f) is { Count: > 0 });
+        !IsOrganizing && OrganizeTargets.Any(f => ScannedFiles(f) is { Count: > 0 })
+        && !OrganizeTargets.Any(f => IsFolderBusy(f.FullPath));
 
     /// <summary>
     /// Result of the last organize/undo. While set, the rescan and preview refresh that follow
@@ -964,6 +1015,12 @@ public class MainViewModel : ObservableObject
                 var (name, request, files) = jobs[i];
                 var index = i;
                 var progressReporter = new Progress<int>(p => Progress = (index * 100 + p) / jobs.Count);
+                // Auto-organize may have started on this folder since the command was enabled
+                if (!_gate.TryEnter(request.SourceFolder))
+                {
+                    parts.Add(jobs.Count == 1 ? "Folder is busy (auto-organize is running), try again" : $"{name}: busy, skipped");
+                    continue;
+                }
                 try
                 {
                     if (!Directory.Exists(request.SourceFolder))
@@ -984,6 +1041,10 @@ public class MainViewModel : ObservableObject
                     {
                         parts.Add($"{name}: error: {ex.Message}");
                     }
+                }
+                finally
+                {
+                    _gate.Exit(request.SourceFolder);
                 }
             }
 
@@ -1044,6 +1105,7 @@ public class MainViewModel : ObservableObject
     /// </summary>
     private async Task UndoOperationsAsync(Func<IReadOnlyList<OrganizeOperation>> next)
     {
+        if (IsOrganizing) return;
         var first = next();
         if (first.Count == 0 || !_organizer.CanUndoOperation(first[0])) return;
 
@@ -1055,24 +1117,40 @@ public class MainViewModel : ObservableObject
         var attempted = new HashSet<OrganizeOperation>();
         try
         {
-            int restored = 0, failed = 0;
+            int restored = 0, failed = 0, busy = 0;
             for (var batch = first; batch.Count > 0; batch = next().Where(op => !attempted.Contains(op)).ToList())
             {
                 foreach (var operation in batch)
                 {
                     attempted.Add(operation);
                     if (!_organizer.CanUndoOperation(operation)) continue;
-                    var progressReporter = new Progress<int>(p => Progress = p);
-                    var result = await _organizer.UndoOperationAsync(operation, progressReporter);
-                    restored += result.Restored;
-                    failed += result.Failed;
-                    if (result.Restored > 0 || operation.IsUndone) undone.Add(operation);
+                    // Not while auto-organize works on the folder (legacy entries have no folder)
+                    var source = operation.SourceFolder;
+                    var gated = !string.IsNullOrWhiteSpace(source);
+                    if (gated && !_gate.TryEnter(source))
+                    {
+                        busy++;
+                        continue;
+                    }
+                    try
+                    {
+                        var progressReporter = new Progress<int>(p => Progress = p);
+                        var result = await _organizer.UndoOperationAsync(operation, progressReporter);
+                        restored += result.Restored;
+                        failed += result.Failed;
+                        if (result.Restored > 0 || operation.IsUndone) undone.Add(operation);
+                    }
+                    finally
+                    {
+                        if (gated) _gate.Exit(source);
+                    }
                 }
             }
 
-            PinStatus(failed == 0
+            var busyInfo = busy > 0 ? $"; {busy} skipped (folder busy), try again" : "";
+            PinStatus((failed == 0
                 ? $"Undo complete! {restored} files restored"
-                : $"Undo partially complete: {restored} files restored, {failed} could not be restored");
+                : $"Undo partially complete: {restored} files restored, {failed} could not be restored") + busyInfo);
             OnPropertyChanged(nameof(CanUndo));
             RefreshHistory();
             await SyncScansAsync(keepStatus: true, rescanAll: true);

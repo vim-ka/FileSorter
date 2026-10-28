@@ -1,6 +1,5 @@
 using System.Windows;
 using System.Windows.Input;
-using FileSorter.ViewModels;
 
 namespace FileSorter.Views;
 
@@ -9,12 +8,8 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        Closing += (_, _) =>
-        {
-            // Don't save on theme switch (window is recreated, not actually closing)
-            if (Application.Current.MainWindow != this) return;
-            (DataContext as MainViewModel)?.SaveSettings();
-        };
+        // Settings are saved and auto-organize stopped by App.OnExit (MainViewModel.Shutdown), so
+        // closing the old window on a theme switch doesn't touch the shared view model.
     }
 
     /// <summary>

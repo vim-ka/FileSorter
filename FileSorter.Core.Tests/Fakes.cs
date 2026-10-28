@@ -1,4 +1,5 @@
 using FileSorter.Abstractions;
+using FileSorter.ViewModels;
 
 namespace FileSorter.Core.Tests;
 
@@ -27,6 +28,79 @@ internal sealed class NullThumbnails : IThumbnailProvider
 internal sealed class NullTheme : IThemeService
 {
     public void ApplyTheme(bool isDark) { }
+}
+
+internal sealed class FakeNotifications : INotificationService
+{
+    private readonly List<(string Title, string Message, Action OnUndo)> _shown = [];
+
+    public List<(string Title, string Message, Action OnUndo)> Shown { get { lock (_shown) return [.. _shown]; } }
+
+    public void ShowAutoOrganized(string title, string message, Action onUndo)
+    {
+        lock (_shown) _shown.Add((title, message, onUndo));
+    }
+}
+
+internal sealed class FakeAutostart : IAutostartService
+{
+    public List<bool> Calls { get; } = [];
+    public bool IsEnabled { get; private set; }
+
+    public void SetEnabled(bool enabled)
+    {
+        Calls.Add(enabled);
+        IsEnabled = enabled;
+    }
+}
+
+/// <summary>
+/// Hosts view models on a <see cref="SingleThreadDispatcher"/>, like the app's UI thread: the test
+/// body, the view model and every continuation run on that one thread, so background work (scans,
+/// auto runs) can't touch the view model while the test is asserting. Work queued by a synchronous
+/// test body runs only after the body returns; async bodies let it run at their awaits.
+/// </summary>
+internal sealed class VmHost : IDisposable
+{
+    private readonly List<MainViewModel> _vms = [];
+
+    public SingleThreadDispatcher Ui { get; } = new();
+    public FakeDialogs Dialogs { get; } = new();
+    public FakeNotifications Notifications { get; } = new();
+    public FakeAutostart Autostart { get; } = new();
+
+    /// <summary>Must be called on the UI thread (inside <see cref="Run(Action)"/>).</summary>
+    public MainViewModel NewVm()
+    {
+        var vm = new MainViewModel(Ui, Dialogs, new NullThumbnails(), new NullTheme(), Notifications, Autostart);
+        _vms.Add(vm);
+        return vm;
+    }
+
+    public FolderViewModel AddFolder(MainViewModel vm, string path)
+    {
+        Dialogs.Folders.Enqueue(path);
+        vm.AddFolderCommand.Execute(null);
+        return vm.SelectedFolder!;
+    }
+
+    public Task Run(Action body) => Ui.RunAsync(body);
+
+    public Task Run(Func<Task> body) => Ui.RunAsync(async () =>
+    {
+        await body();
+        return true;
+    });
+
+    /// <summary>Shuts the view models down (stops auto-organize) on the UI thread, then stops it.</summary>
+    public void Dispose()
+    {
+        Ui.RunAsync(() =>
+        {
+            foreach (var vm in _vms) vm.Shutdown();
+        }).Wait(TimeSpan.FromSeconds(5));
+        Ui.Dispose();
+    }
 }
 
 internal static class Wait

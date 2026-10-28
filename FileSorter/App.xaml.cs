@@ -8,6 +8,8 @@ namespace FileSorter;
 
 public partial class App : Application
 {
+    private MainViewModel? _viewModel;
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -15,13 +17,25 @@ public partial class App : Application
         var settings = SettingsService.Load();
         ApplyTheme(settings.IsDarkTheme);
 
-        var vm = new MainViewModel(
+        _viewModel = new MainViewModel(
             new WpfUiDispatcher(Dispatcher),
             new WpfDialogService(),
             new ThumbnailLoader(Dispatcher),
-            new WpfThemeService());
-        var window = new MainWindow { DataContext = vm };
+            new WpfThemeService(),
+            new NoOpNotificationService(), // TEMPORARY until Task 11
+            new NoOpAutostartService());   // TEMPORARY until Task 11
+        var window = new MainWindow { DataContext = _viewModel };
         window.Show();
+    }
+
+    /// <summary>
+    /// Saves settings and stops auto-organize once, when the app really exits — not when the window
+    /// is recreated for a theme switch (the view model lives on).
+    /// </summary>
+    protected override void OnExit(ExitEventArgs e)
+    {
+        _viewModel?.Shutdown();
+        base.OnExit(e);
     }
 
     public static void ApplyTheme(bool isDark)

@@ -69,7 +69,52 @@ public static class SettingsService
         return settings;
     }
 
-    public static void Save(AppSettings settings) => JsonFileStore.Save(SettingsFile, settings);
+    private const int WriteAttempts = 5;
+    private const int RetryDelayMs = 50;
+
+    private static readonly object WriteLock = new();
+    private static long _lastQueued;
+    private static long _lastWritten;
+
+    /// <summary>Writes the settings now, on the calling thread.</summary>
+    public static void Save(AppSettings settings)
+    {
+        var (path, json, seq) = Prepare(settings);
+        Write(path, json, seq);
+    }
+
+    /// <summary>
+    /// Serializes on the calling thread (the settings may change right after) and writes on a
+    /// background thread. A write never replaces the file with an older state than one already
+    /// written, so saves completing out of order are harmless.
+    /// </summary>
+    public static Task SaveInBackground(AppSettings settings)
+    {
+        var (path, json, seq) = Prepare(settings);
+        return Task.Run(() => Write(path, json, seq));
+    }
+
+    private static (string Path, string Json, long Seq) Prepare(AppSettings settings) =>
+        (JsonFileStore.PathOf(SettingsFile), JsonFileStore.Serialize(settings), Interlocked.Increment(ref _lastQueued));
+
+    private static void Write(string path, string json, long seq)
+    {
+        lock (WriteLock)
+        {
+            if (seq <= _lastWritten) return;
+            // A failed replace (file briefly open elsewhere) is retried; only a state that really
+            // reached the disk may make older pending saves obsolete.
+            for (var attempt = 0; attempt < WriteAttempts; attempt++)
+            {
+                if (JsonFileStore.WriteText(path, json))
+                {
+                    _lastWritten = seq;
+                    return;
+                }
+                Thread.Sleep(RetryDelayMs);
+            }
+        }
+    }
 
     private static AppSettings Migrate(LegacyAppSettings legacy)
     {

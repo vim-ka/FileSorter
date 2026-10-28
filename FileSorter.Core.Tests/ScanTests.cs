@@ -32,7 +32,7 @@ public class ScanTests : TempDataDirTest
         Wait.UntilAsync(condition, timeoutMs);
 
     private static MainViewModel NewVm(IUiDispatcher dispatcher, FakeDialogs dialogs) =>
-        new(dispatcher, dialogs, new NullThumbnails(), new NullTheme());
+        new(dispatcher, dialogs, new NullThumbnails(), new NullTheme(), new FakeNotifications(), new FakeAutostart());
 
     private static void AddFolder(MainViewModel vm, FakeDialogs dialogs, string path)
     {
@@ -71,16 +71,19 @@ public class ScanTests : TempDataDirTest
         TestData.WriteFile(dir, "a.txt");
         TestData.WriteFile(dir, "b.txt");
 
-        var dialogs = new FakeDialogs();
-        var vm = NewVm(new InlineDispatcher(), dialogs);
-        AddFolder(vm, dialogs, dir);
-        await WaitUntilAsync(() => vm.StatusText.Contains("will be organized"));
+        using var host = new VmHost();
+        await host.Run(async () =>
+        {
+            var vm = host.NewVm();
+            host.AddFolder(vm, dir);
+            await WaitUntilAsync(() => vm.StatusText.Contains("will be organized"));
 
-        vm.OrganizeCommand.Execute(null);
-        await WaitUntilAsync(() => !vm.IsOrganizing && !vm.IsScanning);
-        await Task.Delay(1000); // let the post-organize rescan and preview refresh settle
+            vm.OrganizeCommand.Execute(null);
+            await WaitUntilAsync(() => !vm.IsOrganizing && !vm.IsScanning);
+            await Task.Delay(1000); // let the post-organize rescan and preview refresh settle
 
-        Assert.StartsWith("Done! 2 files moved", vm.StatusText);
+            Assert.StartsWith("Done! 2 files moved", vm.StatusText);
+        });
     }
 
     [Fact]

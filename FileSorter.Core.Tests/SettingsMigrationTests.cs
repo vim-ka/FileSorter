@@ -142,4 +142,31 @@ public class SettingsMigrationTests : TempDataDirTest
         Assert.Equal("Downloads", FolderProfile.CreateDefault(@"C:\Users\a\Downloads\").Name);
         Assert.Equal(@"C:\", FolderProfile.CreateDefault(@"C:\").Name);
     }
+
+    [Fact]
+    public async Task SaveInBackground_FileBrieflyOpenElsewhere_RetriedAndLatestLands()
+    {
+        SettingsService.Save(new AppSettings { PauseAll = false });
+        var path = Path.Combine(TempDir, "settings.json");
+
+        Task save;
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read)) // blocks the replace
+        {
+            save = SettingsService.SaveInBackground(new AppSettings { PauseAll = true });
+            await Task.Delay(120);
+        }
+        await save;
+
+        Assert.True(SettingsService.Load().PauseAll);
+    }
+
+    [Fact]
+    public async Task SaveInBackground_OlderSaveFinishingLate_DoesNotOverwriteNewer()
+    {
+        var older = SettingsService.SaveInBackground(new AppSettings { StartWithWindows = false });
+        SettingsService.Save(new AppSettings { StartWithWindows = true });
+        await older;
+
+        Assert.True(SettingsService.Load().StartWithWindows);
+    }
 }

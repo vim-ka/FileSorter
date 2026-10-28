@@ -5,10 +5,14 @@ namespace FileSorter.Core.Tests;
 
 public class RulesEditorTests : TempDataDirTest
 {
-    private readonly FakeDialogs _dialogs = new();
+    private readonly VmHost _host = new();
+
+    protected override void BeforeDispose() => _host.Dispose();
+
+    private FakeDialogs _dialogs => _host.Dialogs;
 
     internal MainViewModel NewVm() =>
-        new(new InlineDispatcher(), _dialogs, new NullThumbnails(), new NullTheme());
+        _host.NewVm();
 
     internal FolderViewModel AddFolder(MainViewModel vm, string path)
     {
@@ -49,7 +53,7 @@ public class RulesEditorTests : TempDataDirTest
     }
 
     [Fact]
-    public void AddRule_AppearsInProfile()
+    public Task AddRule_AppearsInProfile() => _host.Run(() =>
     {
         var vm = NewVm();
         var a = AddFolder(vm, TestData.NewTempDir("A"));
@@ -80,10 +84,10 @@ public class RulesEditorTests : TempDataDirTest
         Assert.False(a.Profile.Rules[0].IsEnabled);
         Assert.Equal("", vm.RulesActiveText);
         Assert.True(raised > 0);
-    }
+    });
 
     [Fact]
-    public async Task NewRule_BlankSeededCondition_LeavesPreviewUnchangedUntilFilled()
+    public Task NewRule_BlankSeededCondition_LeavesPreviewUnchangedUntilFilled() => _host.Run(async () =>
     {
         var dir = TestData.NewTempDir("Src");
         TestData.WriteFile(dir, "clip.mp4");
@@ -100,10 +104,10 @@ public class RulesEditorTests : TempDataDirTest
 
         await Wait.UntilAsync(() => PreviewFolders(vm).Contains("Movies"));
         Assert.Equal(["Movies", "TXT"], PreviewFolders(vm).Order());
-    }
+    });
 
     [Fact]
-    public async Task RuleWithEmptyDestination_LeavesPreviewUnchanged()
+    public Task RuleWithEmptyDestination_LeavesPreviewUnchanged() => _host.Run(async () =>
     {
         var dir = TestData.NewTempDir("Src");
         TestData.WriteFile(dir, "clip.mp4");
@@ -115,10 +119,10 @@ public class RulesEditorTests : TempDataDirTest
 
         Assert.Equal("", vm.RulesActiveText);
         Assert.Equal(["MP4", "TXT"], (await SettledPreviewByExtension(vm)).Order());
-    }
+    });
 
     [Fact]
-    public void Conditions_WriteIntoTheRuleModel()
+    public Task Conditions_WriteIntoTheRuleModel() => _host.Run(() =>
     {
         var vm = NewVm();
         var a = AddFolder(vm, TestData.NewTempDir("A"));
@@ -140,10 +144,10 @@ public class RulesEditorTests : TempDataDirTest
         condition.RemoveCommand.Execute(null);
         Assert.Equal(conditionsBefore, rule.Conditions.Count);
         Assert.DoesNotContain(model, a.Profile.Rules[0].Conditions);
-    }
+    });
 
     [Fact]
-    public void MoveRuleUp_ReordersProfileRules()
+    public Task MoveRuleUp_ReordersProfileRules() => _host.Run(() =>
     {
         var vm = NewVm();
         var a = AddFolder(vm, TestData.NewTempDir("A"));
@@ -162,10 +166,10 @@ public class RulesEditorTests : TempDataDirTest
         vm.MoveRuleDownCommand.Execute(c);
         Assert.Equal(["A", "C", "B"], a.Profile.Rules.Select(r => r.Destination));
         Assert.Equal(["A", "C", "B"], vm.Rules.Select(r => r.Destination));
-    }
+    });
 
     [Fact]
-    public void RemoveRule_RemovesFromProfile()
+    public Task RemoveRule_RemovesFromProfile() => _host.Run(() =>
     {
         var vm = NewVm();
         var a = AddFolder(vm, TestData.NewTempDir("A"));
@@ -176,10 +180,10 @@ public class RulesEditorTests : TempDataDirTest
 
         Assert.Equal(["B"], a.Profile.Rules.Select(r => r.Destination));
         Assert.Equal(["B"], vm.Rules.Select(r => r.Destination));
-    }
+    });
 
     [Fact]
-    public void BrowseRuleDestination_SetsPickedFolder()
+    public Task BrowseRuleDestination_SetsPickedFolder() => _host.Run(() =>
     {
         var vm = NewVm();
         var a = AddFolder(vm, TestData.NewTempDir("A"));
@@ -192,10 +196,10 @@ public class RulesEditorTests : TempDataDirTest
 
         vm.BrowseRuleDestinationCommand.Execute(rule); // cancelled: unchanged
         Assert.Equal(picked, rule.Destination);
-    }
+    });
 
     [Fact]
-    public void Unmatched_WritesIntoProfile()
+    public Task Unmatched_WritesIntoProfile() => _host.Run(() =>
     {
         var vm = NewVm();
         var a = AddFolder(vm, TestData.NewTempDir("A"));
@@ -208,10 +212,10 @@ public class RulesEditorTests : TempDataDirTest
         Assert.Equal(UnmatchedFilesMode.OrganizeNormally, vm.Unmatched);
         vm.SelectFolderCommand.Execute(b);
         Assert.Equal(UnmatchedFilesMode.LeaveInPlace, vm.Unmatched);
-    }
+    });
 
     [Fact]
-    public async Task EditingCondition_RefreshesPreview()
+    public Task EditingCondition_RefreshesPreview() => _host.Run(async () =>
     {
         var dir = TestData.NewTempDir("Src");
         TestData.WriteFile(dir, "clip.mp4");
@@ -234,10 +238,10 @@ public class RulesEditorTests : TempDataDirTest
         condition.Value = "mp4";
 
         await Wait.UntilAsync(() => PreviewFolders(vm).Contains("Movies"));
-    }
+    });
 
     [Fact]
-    public void SwitchFolder_RebuildsRulesFromItsProfile()
+    public Task SwitchFolder_RebuildsRulesFromItsProfile() => _host.Run(() =>
     {
         var vm = NewVm();
         var a = AddFolder(vm, TestData.NewTempDir("A"));
@@ -269,10 +273,10 @@ public class RulesEditorTests : TempDataDirTest
 
         vm.SelectFolderCommand.Execute(b);
         Assert.Equal(["Docs", "Music"], vm.Rules.Select(r => r.Destination));
-    }
+    });
 
     [Fact]
-    public async Task RuleToFullPath_ShowsInPreview_OrganizesAndUndoes()
+    public Task RuleToFullPath_ShowsInPreview_OrganizesAndUndoes() => _host.Run(async () =>
     {
         var src = TestData.NewTempDir("Src");
         var video = TestData.NewTempDir("Video");
@@ -303,5 +307,5 @@ public class RulesEditorTests : TempDataDirTest
         vm.UndoCommand.Execute(null);
         await Wait.UntilAsync(() => !vm.IsOrganizing && File.Exists(clip));
         Assert.False(File.Exists(moved));
-    }
+    });
 }

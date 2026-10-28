@@ -5,10 +5,14 @@ namespace FileSorter.Core.Tests;
 
 public class MainViewModelProfileTests : TempDataDirTest
 {
-    private readonly FakeDialogs _dialogs = new();
+    private readonly VmHost _host = new();
+
+    protected override void BeforeDispose() => _host.Dispose();
+
+    private FakeDialogs _dialogs => _host.Dialogs;
 
     private MainViewModel NewVm() =>
-        new(new InlineDispatcher(), _dialogs, new NullThumbnails(), new NullTheme());
+        _host.NewVm();
 
     private FolderViewModel AddFolder(MainViewModel vm, string path)
     {
@@ -21,7 +25,7 @@ public class MainViewModelProfileTests : TempDataDirTest
         vm.Folders.Single(f => f.FullPath == path);
 
     [Fact]
-    public void SelectFolder_LoadsItsProfileIntoProperties()
+    public Task SelectFolder_LoadsItsProfileIntoProperties() => _host.Run(() =>
     {
         var vm = NewVm();
         var a = AddFolder(vm, TestData.NewTempDir("A"));
@@ -44,10 +48,10 @@ public class MainViewModelProfileTests : TempDataDirTest
         Assert.True(b.IsSelected);
         Assert.False(a.IsSelected);
         Assert.Equal(b.FullPath, vm.SourceFolder);
-    }
+    });
 
     [Fact]
-    public void ChangingProperty_WritesToSelectedProfileOnly()
+    public Task ChangingProperty_WritesToSelectedProfileOnly() => _host.Run(() =>
     {
         var vm = NewVm();
         var b = AddFolder(vm, TestData.NewTempDir("B"));
@@ -60,10 +64,10 @@ public class MainViewModelProfileTests : TempDataDirTest
         Assert.False(vm.CopyMode);
         Assert.False(b.Profile.CopyMode);
         Assert.True(a.Profile.CopyMode);
-    }
+    });
 
     [Fact]
-    public void CategoryToggle_PersistsInProfile()
+    public Task CategoryToggle_PersistsInProfile() => _host.Run(() =>
     {
         var path = TestData.NewTempDir("A");
         var vm = NewVm();
@@ -78,10 +82,10 @@ public class MainViewModelProfileTests : TempDataDirTest
 
         Assert.False(vm2.Categories.Single(c => c.Name == "Images").IsSelected);
         Assert.All(vm2.Categories.Where(c => c.Name != "Images"), c => Assert.True(c.IsSelected));
-    }
+    });
 
     [Fact]
-    public void CategoryToggle_DoesNotLeakIntoOtherFolder()
+    public Task CategoryToggle_DoesNotLeakIntoOtherFolder() => _host.Run(() =>
     {
         var vm = NewVm();
         var a = AddFolder(vm, TestData.NewTempDir("A"));
@@ -95,30 +99,30 @@ public class MainViewModelProfileTests : TempDataDirTest
         vm.SelectFolderCommand.Execute(a);
         Assert.False(vm.Categories.Single(c => c.Name == "Images").IsSelected);
         Assert.Equal(["Images"], b.Profile.DisabledCategories);
-    }
+    });
 
     [Fact]
-    public void AddFolder_ManyFolders_NoneEvicted()
+    public Task AddFolder_ManyFolders_NoneEvicted() => _host.Run(() =>
     {
         var vm = NewVm();
         for (int i = 0; i < 15; i++)
             AddFolder(vm, TestData.NewTempDir($"F{i}"));
 
         Assert.Equal(15, vm.Folders.Count);
-    }
+    });
 
     [Fact]
-    public void AddFolder_NewFolderGoesToTop()
+    public Task AddFolder_NewFolderGoesToTop() => _host.Run(() =>
     {
         var vm = NewVm();
         AddFolder(vm, TestData.NewTempDir("A"));
         var b = AddFolder(vm, TestData.NewTempDir("B"));
 
         Assert.Same(b, vm.Folders[0]);
-    }
+    });
 
     [Fact]
-    public void AddFolder_ExistingPathDifferentCase_SelectsExisting()
+    public Task AddFolder_ExistingPathDifferentCase_SelectsExisting() => _host.Run(() =>
     {
         var path = TestData.NewTempDir("Case");
         var vm = NewVm();
@@ -129,10 +133,10 @@ public class MainViewModelProfileTests : TempDataDirTest
 
         Assert.Same(a, again);
         Assert.Equal(2, vm.Folders.Count);
-    }
+    });
 
     [Fact]
-    public void NewFolder_GetsBuiltInDefaults()
+    public Task NewFolder_GetsBuiltInDefaults() => _host.Run(() =>
     {
         var vm = NewVm();
         AddFolder(vm, TestData.NewTempDir("A"));
@@ -144,10 +148,10 @@ public class MainViewModelProfileTests : TempDataDirTest
         Assert.False(b.Profile.CopyMode);
         Assert.False(vm.CopyMode);
         Assert.Equal(OrganizeMethod.ByType, vm.SelectedMethod);
-    }
+    });
 
     [Fact]
-    public void SaveAndReload_RestoresEveryFolderAndItsValues()
+    public Task SaveAndReload_RestoresEveryFolderAndItsValues() => _host.Run(() =>
     {
         var pathA = TestData.NewTempDir("A");
         var pathB = TestData.NewTempDir("B");
@@ -184,10 +188,10 @@ public class MainViewModelProfileTests : TempDataDirTest
         vm2.SelectFolderCommand.Execute(Find(vm2, pathB));
         Assert.Equal(OrganizeMethod.ByAlphabet, vm2.SelectedMethod);
         Assert.False(vm2.CopyMode);
-    }
+    });
 
     [Fact]
-    public void RemoveFolder_RemovesItAndClearsSelectionWhenSelected()
+    public Task RemoveFolder_RemovesItAndClearsSelectionWhenSelected() => _host.Run(() =>
     {
         var pathA = TestData.NewTempDir("A");
         var vm = NewVm();
@@ -205,17 +209,17 @@ public class MainViewModelProfileTests : TempDataDirTest
 
         vm.SaveSettings();
         Assert.Empty(NewVm().Folders);
-    }
+    });
 
     [Fact]
-    public void NoSelectedFolder_ChangesAreNotSaved()
+    public Task NoSelectedFolder_ChangesAreNotSaved() => _host.Run(() =>
     {
         var vm = NewVm();
         vm.CopyMode = true;
         vm.SaveSettings();
 
         Assert.Empty(NewVm().Folders);
-    }
+    });
 
     [Theory]
     [InlineData(false, false, AutoStatus.Off)]

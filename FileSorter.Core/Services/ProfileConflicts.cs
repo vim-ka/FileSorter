@@ -19,13 +19,7 @@ public static class ProfileConflicts
         if (others.Count == 0) return warnings;
 
         var destination = string.IsNullOrWhiteSpace(profile.DestinationFolder) ? null : profile.DestinationFolder;
-        var ruleFolders = profile.Rules
-            .Select(r => r.Snapshot())
-            .OfType<RoutingRuleSnapshot>()
-            .Where(r => Path.IsPathFullyQualified(r.Destination))
-            .Select(r => r.ResolveFolder(""))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        var ruleFolders = RuleFolders(profile);
 
         foreach (var other in others)
         {
@@ -42,6 +36,38 @@ public static class ProfileConflicts
 
         return warnings;
     }
+
+    /// <summary>
+    /// The other direction of <see cref="Find"/>: other auto-organized folders whose destination (or a
+    /// full-path rule destination) is <paramref name="target"/>'s root or inside it. Only matters while
+    /// <paramref name="target"/> is auto-organized itself; nesting is reported by <see cref="Find"/>.
+    /// </summary>
+    public static IReadOnlyList<string> FindIncoming(FolderProfile target, IReadOnlyList<FolderProfile> all)
+    {
+        var warnings = new List<string>();
+        if (!target.Auto.Enabled || string.IsNullOrWhiteSpace(target.FullPath)) return warnings;
+
+        foreach (var other in all.Where(o => o.Auto.Enabled && !string.IsNullOrWhiteSpace(o.FullPath)
+                                             && !SafeEqual(o.FullPath, target.FullPath)))
+        {
+            var sendsHere = !string.IsNullOrWhiteSpace(other.DestinationFolder)
+                            && IsSameOrInside(other.DestinationFolder, target.FullPath);
+            sendsHere |= RuleFolders(other).Any(f => IsSameOrInside(f, target.FullPath));
+            if (sendsHere)
+                warnings.Add($"Auto-organized folder \"{other.Name}\" sends files into this folder — they may be organized again.");
+        }
+
+        return warnings;
+    }
+
+    /// <summary>Fully qualified destination folders of the profile's effective rules.</summary>
+    private static List<string> RuleFolders(FolderProfile profile) => profile.Rules
+        .Select(r => r.Snapshot())
+        .OfType<RoutingRuleSnapshot>()
+        .Where(r => Path.IsPathFullyQualified(r.Destination))
+        .Select(r => r.ResolveFolder(""))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToList();
 
     private static bool IsSameOrInside(string path, string folder)
     {

@@ -120,22 +120,24 @@ public class HistoryRunTests : TempDataDirTest
             }
         });
 
-        var dialogs = new FakeDialogs();
-        var vm = new MainViewModel(new InlineDispatcher(), dialogs, new NullThumbnails(), new NullTheme());
-        dialogs.Folders.Enqueue(dir);
-        vm.AddFolderCommand.Execute(null);
-        await Wait.UntilAsync(() => vm.HistoryItems.Count == 1);
-        var op = vm.HistoryItems[0];
+        using var host = new VmHost();
+        await host.Run(async () =>
+        {
+            var vm = host.NewVm();
+            host.AddFolder(vm, dir);
+            await Wait.UntilAsync(() => vm.HistoryItems.Count == 1);
+            var op = vm.HistoryItems[0];
 
-        IReadOnlyList<OrganizeOperation>? undone = null;
-        vm.OperationsUndone += ops => undone = ops;
-        Assert.True(vm.CanUndo);
+            IReadOnlyList<OrganizeOperation>? undone = null;
+            vm.OperationsUndone += ops => undone = ops;
+            Assert.True(vm.CanUndo);
 
-        vm.UndoCommand.Execute(null);
-        await Wait.UntilAsync(() => !vm.IsOrganizing && op.IsUndone && vm.StatusText.StartsWith("Undo"));
+            vm.UndoCommand.Execute(null);
+            await Wait.UntilAsync(() => !vm.IsOrganizing && op.IsUndone && vm.StatusText.StartsWith("Undo"));
 
-        Assert.True(File.Exists(original));
-        Assert.Equal([op], undone);
-        Assert.StartsWith("Undo complete", vm.StatusText);
+            Assert.True(File.Exists(original));
+            Assert.Equal([op], undone);
+            Assert.StartsWith("Undo complete", vm.StatusText);
+        });
     }
 }

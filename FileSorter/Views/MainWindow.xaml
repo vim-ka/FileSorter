@@ -117,6 +117,7 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*" />
                     <RowDefinition Height="8" />
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
@@ -177,6 +178,7 @@
                                                     <ColumnDefinition Width="*" />
                                                     <ColumnDefinition Width="Auto" />
                                                     <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
                                                 </Grid.ColumnDefinitions>
 
                                                 <!-- Checked folders are organized together, each with its own profile -->
@@ -218,13 +220,34 @@
                                                         </Style>
                                                     </TextBlock.Style>
                                                 </TextBlock>
-                                                <TextBlock Grid.Column="3"
+                                                <!-- Auto-organize indicator: green = on, yellow = paused, none = off -->
+                                                <Ellipse Grid.Column="3" Width="7" Height="7"
+                                                         VerticalAlignment="Center" Margin="6,0,0,0">
+                                                    <Ellipse.Style>
+                                                        <Style TargetType="Ellipse">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding AutoStatus}" Value="On">
+                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                    <Setter Property="Fill" Value="{StaticResource SuccessBrush}" />
+                                                                    <Setter Property="ToolTip" Value="Auto-organize on" />
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding AutoStatus}" Value="Paused">
+                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                    <Setter Property="Fill" Value="{StaticResource WarningBrush}" />
+                                                                    <Setter Property="ToolTip" Value="Auto-organize paused" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Ellipse.Style>
+                                                </Ellipse>
+                                                <TextBlock Grid.Column="4"
                                                            Text="{Binding FileCount}"
                                                            FontSize="11"
                                                            Foreground="{StaticResource SecondaryTextBrush}"
                                                            VerticalAlignment="Center"
                                                            Margin="8,0,0,0" />
-                                                <Button Grid.Column="4"
+                                                <Button Grid.Column="5"
                                                         Command="{Binding DataContext.RemoveFolderCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                         CommandParameter="{Binding}"
                                                         Content="&#xE711;"
@@ -268,8 +291,110 @@
                     </ScrollViewer>
                 </Border>
 
+                <!-- ===== AUTO-ORGANIZE (selected folder) + global options ===== -->
+                <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,0,0,8">
+                    <StackPanel>
+                        <Grid Visibility="{Binding HasSourceFolder, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="Auto-organize"
+                                       Foreground="{StaticResource SecondaryTextBrush}"
+                                       FontSize="12" FontWeight="SemiBold"
+                                       VerticalAlignment="Center"
+                                       ToolTip="Organize this folder's root automatically with its current settings" />
+                            <CheckBox Style="{StaticResource ModernCheckBox}"
+                                      HorizontalAlignment="Right" VerticalAlignment="Center"
+                                      IsChecked="{Binding AutoEnabled}"
+                                      ToolTip="Auto-organize this folder with its current settings" />
+                        </Grid>
+
+                        <StackPanel Visibility="{Binding AutoEnabled, Converter={StaticResource BoolToVis}}"
+                                    Margin="0,6,0,0">
+                            <CheckBox Style="{StaticResource ModernCheckBox}"
+                                      Content="On new files" FontSize="12"
+                                      IsChecked="{Binding AutoOnNewFiles}"
+                                      Margin="0,0,0,6"
+                                      ToolTip="Organize new files about 30 seconds after they stop changing" />
+
+                            <Grid Margin="0,0,0,2">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="44" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <CheckBox Grid.Column="0" Style="{StaticResource ModernCheckBox}"
+                                          Content="Every" FontSize="12"
+                                          IsChecked="{Binding AutoScheduleEnabled}"
+                                          VerticalAlignment="Center" Margin="0,0,6,0" />
+                                <TextBox Grid.Column="1"
+                                         Text="{Binding AutoScheduleInterval}"
+                                         IsEnabled="{Binding AutoScheduleEnabled}"
+                                         FontSize="12" Padding="4,3"
+                                         Background="{StaticResource SecondaryBackgroundBrush}"
+                                         Foreground="{StaticResource PrimaryTextBrush}"
+                                         BorderBrush="{StaticResource BorderBrush}"
+                                         BorderThickness="1"
+                                         Margin="0,0,6,0" />
+                                <ComboBox Grid.Column="2" FontSize="12" Padding="6,3"
+                                          IsEnabled="{Binding AutoScheduleEnabled}"
+                                          SelectedValuePath="Tag"
+                                          SelectedValue="{Binding AutoScheduleUnit}">
+                                    <ComboBoxItem Content="Minutes" Tag="{x:Static models:ScheduleUnit.Minutes}" />
+                                    <ComboBoxItem Content="Hours" Tag="{x:Static models:ScheduleUnit.Hours}" />
+                                    <ComboBoxItem Content="Days" Tag="{x:Static models:ScheduleUnit.Days}" />
+                                </ComboBox>
+                            </Grid>
+
+                            <!-- Undoing one of the folder's operations pauses it -->
+                            <Grid Margin="0,6,0,0"
+                                  Visibility="{Binding AutoIsPaused, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Text="Paused (an operation was undone)"
+                                           Foreground="{StaticResource WarningBrush}"
+                                           FontSize="12" VerticalAlignment="Center"
+                                           TextTrimming="CharacterEllipsis" Margin="0,0,64,0" />
+                                <Button Style="{StaticResource SecondaryButton}"
+                                        Command="{Binding ResumeAutoCommand}"
+                                        HorizontalAlignment="Right" Padding="8,3">
+                                    <TextBlock Text="Resume" FontFamily="Segoe UI" FontSize="11" />
+                                </Button>
+                            </Grid>
+
+                            <ItemsControl ItemsSource="{Binding AutoWarnings}" Margin="0,6,0,0"
+                                          Visibility="{Binding HasAutoWarnings, Converter={StaticResource BoolToVis}}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding}"
+                                                   Foreground="{StaticResource WarningBrush}"
+                                                   FontSize="11" TextWrapping="Wrap"
+                                                   Margin="0,0,0,3" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+
+                        <!-- Global pause (also in the tray menu) -->
+                        <Grid Margin="0,6,0,0"
+                              Visibility="{Binding PauseAll, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="All auto-organize paused"
+                                       Foreground="{StaticResource WarningBrush}"
+                                       FontSize="12" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" Margin="0,0,80,0" />
+                            <Button Style="{StaticResource SecondaryButton}"
+                                    Command="{Binding TogglePauseAllCommand}"
+                                    HorizontalAlignment="Right" Padding="8,3">
+                                <TextBlock Text="Resume all" FontFamily="Segoe UI" FontSize="11" />
+                            </Button>
+                        </Grid>
+
+                        <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,8,0,6" />
+
+                        <CheckBox Style="{StaticResource ModernCheckBox}"
+                                  Content="Start with Windows" FontSize="12"
+                                  IsChecked="{Binding StartWithWindows}"
+                                  ToolTip="Start FileSorter in the tray when you sign in" />
+                    </StackPanel>
+                </Border>
+
                 <!-- ===== BOTTOM HALF: RULES ===== -->
-                <Border Grid.Row="2" Style="{StaticResource Card}">
+                <Border Grid.Row="3" Style="{StaticResource Card}">
                     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                         <StackPanel>
                             <!-- Routing rules: checked top to bottom, the first match wins -->

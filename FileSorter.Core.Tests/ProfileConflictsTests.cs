@@ -101,4 +101,31 @@ public class ProfileConflictsTests
 
         Assert.Empty(ProfileConflicts.Find(a, [a, Profile(@"c:\a\", auto: true)]));
     }
+
+    [Fact]
+    public void FindIncoming_OtherAutoFolderSendsIntoTarget_Warns()
+    {
+        var downloads = Profile(@"C:\Downloads", auto: true);
+        var desktop = Profile(@"C:\Desktop", auto: true, destination: @"C:\Downloads\Sorted");
+        var rule = Rule(@"C:\Downloads");
+        rule.Conditions = [new FilterRule { Field = RuleField.Extension, Operator = RuleOperator.Is, Value = "mp4" }];
+        var music = Profile(@"C:\Music", auto: true);
+        music.Rules = [rule];
+        var manual = Profile(@"C:\Manual", destination: @"C:\Downloads"); // not auto: not reported here
+
+        var warnings = ProfileConflicts.FindIncoming(downloads, [downloads, desktop, music, manual]);
+
+        Assert.Equal(2, warnings.Count);
+        Assert.Contains(warnings, w => w.Contains("Desktop"));
+        Assert.Contains(warnings, w => w.Contains("Music"));
+    }
+
+    [Fact]
+    public void FindIncoming_TargetNotAuto_NoWarnings()
+    {
+        var downloads = Profile(@"C:\Downloads");
+        var desktop = Profile(@"C:\Desktop", auto: true, destination: @"C:\Downloads");
+
+        Assert.Empty(ProfileConflicts.FindIncoming(downloads, [downloads, desktop]));
+    }
 }

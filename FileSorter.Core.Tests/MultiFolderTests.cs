@@ -6,13 +6,17 @@ namespace FileSorter.Core.Tests;
 
 public class MultiFolderTests : TempDataDirTest
 {
-    private readonly FakeDialogs _dialogs = new();
+    private readonly VmHost _host = new();
+
+    protected override void BeforeDispose() => _host.Dispose();
+
+    private FakeDialogs _dialogs => _host.Dialogs;
     private readonly List<FileCategory> _categories = FileCategoryService.GetDefaultCategories();
 
     private static readonly RgbColor[] Colors = [new(1, 1, 1), new(2, 2, 2), new(3, 3, 3)];
 
     private MainViewModel NewVm() =>
-        new(new InlineDispatcher(), _dialogs, new NullThumbnails(), new NullTheme());
+        _host.NewVm();
 
     private FolderViewModel AddFolder(MainViewModel vm, string path)
     {
@@ -97,7 +101,7 @@ public class MultiFolderTests : TempDataDirTest
     }
 
     [Fact]
-    public void OrganizeTargets_CheckedWin_ElseSelected()
+    public Task OrganizeTargets_CheckedWin_ElseSelected() => _host.Run(() =>
     {
         var vm = NewVm();
         var a = AddFolder(vm, TestData.NewTempDir("A"));
@@ -116,10 +120,10 @@ public class MultiFolderTests : TempDataDirTest
         b.IsChecked = false;
         Assert.Equal([a], vm.OrganizeTargets);
         Assert.Equal("ORGANIZE", vm.OrganizeButtonText);
-    }
+    });
 
     [Fact]
-    public async Task Organize_TwoCheckedFolders_EachWithOwnProfile_OneRunTwoOperations()
+    public Task Organize_TwoCheckedFolders_EachWithOwnProfile_OneRunTwoOperations() => _host.Run(async () =>
     {
         var (vm, a, b) = await TwoCheckedFoldersAsync();
         Assert.Equal(["B", "A"], vm.PreviewItems.Select(p => p.Name.Split('_')[1]));
@@ -137,10 +141,10 @@ public class MultiFolderTests : TempDataDirTest
         Assert.NotEqual(Guid.Empty, ops[0].RunId);
         Assert.Equal(new[] { a.FullPath, b.FullPath }.OrderBy(p => p), ops.Select(o => o.SourceFolder).OrderBy(p => p));
         Assert.Equal($"{b.Name}: 2 moved; {a.Name}: 2 moved", vm.StatusText);
-    }
+    });
 
     [Fact]
-    public async Task Organize_OneFolderFails_OthersStillProcessed()
+    public Task Organize_OneFolderFails_OthersStillProcessed() => _host.Run(async () =>
     {
         var (vm, a, b) = await TwoCheckedFoldersAsync();
         Directory.Delete(a.FullPath, recursive: true);
@@ -152,10 +156,10 @@ public class MultiFolderTests : TempDataDirTest
         Assert.True(File.Exists(Path.Combine(b.FullPath, "JPG", "d.jpg")));
         Assert.StartsWith($"{b.Name}: 2 moved; {a.Name}: error", vm.StatusText);
         Assert.Empty(_dialogs.Errors);
-    }
+    });
 
     [Fact]
-    public async Task Undo_AfterMultiFolderRun_RestoresBoth()
+    public Task Undo_AfterMultiFolderRun_RestoresBoth() => _host.Run(async () =>
     {
         var (vm, a, b) = await TwoCheckedFoldersAsync();
         vm.OrganizeCommand.Execute(null);
@@ -169,10 +173,10 @@ public class MultiFolderTests : TempDataDirTest
         Assert.True(File.Exists(Path.Combine(b.FullPath, "c.txt")));
         Assert.True(File.Exists(Path.Combine(b.FullPath, "d.jpg")));
         Assert.False(vm.CanUndo);
-    }
+    });
 
     [Fact]
-    public async Task Undo_RunWhoseLaterOperationMovedEarlierOutputs_UndoneInOneClick()
+    public Task Undo_RunWhoseLaterOperationMovedEarlierOutputs_UndoneInOneClick() => _host.Run(async () =>
     {
         var dir = TestData.NewTempDir("chain");
         var original = Path.Combine(dir, "orig.txt");
@@ -197,10 +201,10 @@ public class MultiFolderTests : TempDataDirTest
         Assert.True(File.Exists(original));
         Assert.False(File.Exists(final));
         Assert.All(vm.HistoryItems, o => Assert.True(o.IsUndone));
-    }
+    });
 
     [Fact]
-    public async Task UncheckingFolder_RemovesItFromPreview()
+    public Task UncheckingFolder_RemovesItFromPreview() => _host.Run(async () =>
     {
         var (vm, a, b) = await TwoCheckedFoldersAsync();
 
@@ -211,10 +215,10 @@ public class MultiFolderTests : TempDataDirTest
         // one target left: back to the single-folder layout, B's own profile (by extension)
         Assert.Equal("Destination \u2192 Folder", vm.PreviewItems[0].Name);
         Assert.Equal(["JPG", "TXT"], vm.PreviewItems[0].Children.Select(c => c.Name).OrderBy(n => n));
-    }
+    });
 
     [Fact]
-    public async Task CheckedFolder_IncludeSubfoldersComesFromItsOwnProfile()
+    public Task CheckedFolder_IncludeSubfoldersComesFromItsOwnProfile() => _host.Run(async () =>
     {
         var dirA = TestData.NewTempDir("A");
         TestData.WriteFile(dirA, "top.txt");
@@ -236,10 +240,10 @@ public class MultiFolderTests : TempDataDirTest
         await Wait.UntilAsync(() => !vm.IsScanning && vm.StatusText.Contains("3 of 3 files will be organized"));
         Assert.Equal(1, a.FileCount);
         Assert.Equal(2, b.FileCount);
-    }
+    });
 
     [Fact]
-    public void WhileOrganizing_FolderSelectionAndRemovalAreIgnored()
+    public Task WhileOrganizing_FolderSelectionAndRemovalAreIgnored() => _host.Run(() =>
     {
         var vm = NewVm();
         var a = AddFolder(vm, TestData.NewTempDir("A"));
@@ -251,5 +255,5 @@ public class MultiFolderTests : TempDataDirTest
 
         Assert.Same(b, vm.SelectedFolder);
         Assert.Equal(2, vm.Folders.Count);
-    }
+    });
 }

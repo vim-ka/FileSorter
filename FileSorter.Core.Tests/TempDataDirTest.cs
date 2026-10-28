@@ -16,8 +16,12 @@ public abstract class TempDataDirTest : IDisposable
         JsonFileStore.DataDir = TempDir;
     }
 
+    /// <summary>Runs first in <see cref="Dispose"/>, while the temp data folder is still in use.</summary>
+    protected virtual void BeforeDispose() { }
+
     public void Dispose()
     {
+        BeforeDispose();
         JsonFileStore.DataDir = _previousDataDir;
         try { Directory.Delete(TempDir, recursive: true); } catch (IOException) { }
         GC.SuppressFinalize(this);

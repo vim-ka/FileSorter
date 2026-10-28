@@ -174,7 +174,18 @@ public sealed class AutoOrganizeEngine : IDisposable
             if (!IsLive(state) || selection.Ready.Count == 0) return null;
 
             var request = OrganizeRequest.FromProfile(profile, _categories);
-            operation = await _organizer.OrganizeAsync(selection.Ready, request, RunContext.NewAuto());
+            var run = RunContext.NewAuto();
+            try
+            {
+                operation = await _organizer.OrganizeAsync(selection.Ready, request, run);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // Files may have been moved before it failed (e.g. saving history): the service records
+                // whatever was done, so pick that up — it must be remembered and reported like any run.
+                operation = _organizer.History.LastOrDefault(op => op.RunId == run.RunId);
+                if (operation == null) return null;
+            }
             RememberPlaced(operation);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or OperationCanceledException)
