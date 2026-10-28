@@ -348,6 +348,35 @@ public sealed class MainViewModelAutoTests : TempDataDirTest
         Assert.Equal([true, false], _host.Autostart.Calls);
     });
 
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public Task StartWithWindows_AtStartup_FollowsAutostartServiceNotSettings(bool saved, bool actual) => _host.Run(() =>
+    {
+        SettingsService.Save(new AppSettings { StartWithWindows = saved });
+        _host.Autostart.IsEnabled = actual;
+
+        var vm = _host.NewVm();
+
+        Assert.Equal(actual, vm.StartWithWindows);
+        Assert.Empty(_host.Autostart.Calls);
+    });
+
+    [Fact]
+    public Task StartWithWindows_FailedChange_KeepsActualState() => _host.Run(() =>
+    {
+        var vm = _host.NewVm();
+        _host.Autostart.FailWrites = true;
+        var raised = new List<string?>();
+        vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        vm.StartWithWindows = true;
+
+        Assert.Equal([true], _host.Autostart.Calls);
+        Assert.False(vm.StartWithWindows);
+        Assert.Contains(nameof(MainViewModel.StartWithWindows), raised); // the checkbox snaps back
+    });
+
     [Fact]
     public Task AutoWarnings_DestinationInsideOtherAutoFolder() => _host.Run(() =>
     {

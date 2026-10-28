@@ -91,6 +91,10 @@ public partial class MainViewModel
         }
     }
 
+    /// <summary>
+    /// The OS autostart entry is the source of truth (read at startup); settings only mirror it. A
+    /// change that could not be applied leaves the actual state, so the checkbox snaps back.
+    /// </summary>
     public bool StartWithWindows
     {
         get => _settings.StartWithWindows;
@@ -98,7 +102,7 @@ public partial class MainViewModel
         {
             if (_settings.StartWithWindows == value) return;
             _autostart.SetEnabled(value);
-            _settings.StartWithWindows = value;
+            _settings.StartWithWindows = _autostart.IsEnabled;
             OnPropertyChanged();
             SaveSettingsInBackground();
         }

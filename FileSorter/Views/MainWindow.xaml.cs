@@ -1,5 +1,7 @@
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Input;
+using FileSorter.ViewModels;
 
 namespace FileSorter.Views;
 
@@ -8,8 +10,31 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        // Settings are saved and auto-organize stopped by App.OnExit (MainViewModel.Shutdown), so
-        // closing the old window on a theme switch doesn't touch the shared view model.
+        // Settings are saved and auto-organize stopped by App.ExitApplication/OnExit
+        // (MainViewModel.Shutdown), so closing the old window on a theme switch doesn't touch the
+        // shared view model.
+    }
+
+    /// <summary>While auto-organize is on somewhere, closing hides the window into the tray.</summary>
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        base.OnClosing(e);
+        if (e.Cancel || App.IsSwitchingTheme || Application.Current is not App { IsExiting: false } app)
+            return;
+        if (DataContext is MainViewModel { KeepRunningInBackground: true })
+        {
+            e.Cancel = true;
+            Hide();
+            app.OnHiddenToTray();
+        }
+    }
+
+    /// <summary>A real close (not a theme switch, not hidden) ends the program.</summary>
+    protected override void OnClosed(EventArgs e)
+    {
+        base.OnClosed(e);
+        if (!App.IsSwitchingTheme && Application.Current is App app)
+            app.ExitApplication();
     }
 
     /// <summary>

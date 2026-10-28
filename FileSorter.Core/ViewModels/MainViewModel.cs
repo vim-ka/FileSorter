@@ -517,6 +517,8 @@ public partial class MainViewModel : ObservableObject
     private void LoadSettings()
     {
         _settings = SettingsService.Load();
+        // The entry may have been removed (or added) outside the program
+        _settings.StartWithWindows = _autostart.IsEnabled;
         _isDarkTheme = _settings.IsDarkTheme;
         _selectedViewMode = _settings.SelectedViewMode;
 

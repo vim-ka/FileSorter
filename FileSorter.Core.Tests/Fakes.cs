@@ -45,12 +45,15 @@ internal sealed class FakeNotifications : INotificationService
 internal sealed class FakeAutostart : IAutostartService
 {
     public List<bool> Calls { get; } = [];
-    public bool IsEnabled { get; private set; }
+    public bool IsEnabled { get; set; }
+
+    /// <summary>Simulates a registry write that fails: the state stays as it was.</summary>
+    public bool FailWrites { get; set; }
 
     public void SetEnabled(bool enabled)
     {
         Calls.Add(enabled);
-        IsEnabled = enabled;
+        if (!FailWrites) IsEnabled = enabled;
     }
 }
 
