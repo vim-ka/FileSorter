@@ -22,13 +22,25 @@ public sealed class RegistryAutostartService : IAutostartService
         _valueName = valueName;
     }
 
+    private const string ExeName = "FileSorter.exe";
+
     /// <summary>The command line the Run entry should hold for this executable.</summary>
     public static string Command => $"\"{Environment.ProcessPath}\" {TrayArgument}";
+
+    /// <summary>
+    /// Running as the real app executable (not <c>dotnet.exe</c>, a test host or a renamed copy):
+    /// only then may the Run entry point at this process.
+    /// </summary>
+    public static bool IsAppExecutable(string? processPath) =>
+        !string.IsNullOrEmpty(processPath)
+        && string.Equals(Path.GetFileName(processPath), ExeName, StringComparison.OrdinalIgnoreCase);
 
     public bool IsEnabled => ReadValue() is { Length: > 0 };
 
     public void SetEnabled(bool enabled)
     {
+        // Never point the entry at a host that isn't the app; the caller reads IsEnabled back
+        if (enabled && !IsAppExecutable(Environment.ProcessPath)) return;
         try
         {
             using var key = Registry.CurrentUser.CreateSubKey(RunKeyPath, writable: true);
@@ -45,10 +57,12 @@ public sealed class RegistryAutostartService : IAutostartService
 
     /// <summary>
     /// If autostart is on but the entry points elsewhere (the program was moved or updated to another
-    /// folder), rewrites it for this executable.
+    /// folder), rewrites it for this executable — only when running as <c>FileSorter.exe</c>, so
+    /// e.g. <c>dotnet FileSorter.dll</c> never hijacks the entry.
     /// </summary>
     public void RefreshCommandIfEnabled()
     {
+        if (!IsAppExecutable(Environment.ProcessPath)) return;
         var current = ReadValue();
         if (current is { Length: > 0 } && !string.Equals(current, Command, StringComparison.OrdinalIgnoreCase))
             SetEnabled(true);
