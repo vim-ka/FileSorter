@@ -109,8 +109,68 @@ public class PlannerTests : TempDataDirTest
         Assert.Equal(2, Assert.Single(plan).Files.Count);
     }
 
+    [Theory]
+    [InlineData("/Movies")]
+    [InlineData(@"\Movies")]
+    [InlineData(@"Movies\")]
+    public void Plan_RootedRelativeDestination_StaysInsideTarget(string destination)
+    {
+        var request = Request(rules: [Rule(destination, RuleField.Extension, RuleOperator.Is, "mp4")]);
+
+        var group = Assert.Single(FileOrganizerService.Plan([File("clip.mp4")], request));
+
+        Assert.Equal(Path.Combine(Target, "Movies"), group.FolderPath);
+        Assert.Equal(["Movies"], group.DisplaySegments);
+    }
+
     [Fact]
-    public void Plan_MatchAny_MatchesWhenOneConditionHolds()
+    public void Snapshot_DriveRelativeDestination_IsInvalid()
+    {
+        Assert.Null(Rule("D:Movies", RuleField.Name, RuleOperator.Contains, "").Snapshot());
+    }
+
+    [Fact]
+    public void Plan_EquivalentRelativeDestinations_MergeIntoOneGroup()
+    {
+        var request = Request(rules:
+        [
+            Rule(@".\Movies", RuleField.Extension, RuleOperator.Is, "mp4"),
+            Rule("Movies", RuleField.Extension, RuleOperator.Is, "mkv"),
+            Rule(@"Movies\..\Movies", RuleField.Extension, RuleOperator.Is, "avi")
+        ]);
+
+        var plan = FileOrganizerService.Plan([File("a.mp4"), File("b.mkv"), File("c.avi")], request);
+
+        var group = Assert.Single(plan);
+        Assert.Equal(Path.Combine(Target, "Movies"), group.FolderPath);
+        Assert.Equal(3, group.Files.Count);
+    }
+
+    [Fact]
+    public void Plan_DotDestination_IsTheTargetFolderItself()
+    {
+        var request = Request(rules: [Rule(".", RuleField.Extension, RuleOperator.Is, "mp4")]);
+
+        var group = Assert.Single(FileOrganizerService.Plan([File("clip.mp4")], request));
+
+        Assert.Equal(Target, group.FolderPath);
+        Assert.Equal(["."], group.DisplaySegments);
+    }
+
+    [Fact]
+    public void Plan_EmptyTargetWithRules_DoesNotThrow()
+    {
+        var profile = FolderProfile.CreateDefault("");
+        profile.Rules.Add(Rule("Movies", RuleField.Extension, RuleOperator.Is, "mp4"));
+        var request = OrganizeRequest.FromProfile(profile, Categories);
+
+        var group = Assert.Single(FileOrganizerService.Plan([TestData.Item(@"C:\x\clip.mp4")], request));
+
+        Assert.Equal(["Movies"], group.DisplaySegments);
+    }
+
+    [Fact]
+    public void RoutingRuleSnapshot_Matches_AllVsAnyConditions()
     {
         var rule = Rule("Media", RuleField.Extension, RuleOperator.Is, "mp4");
         rule.Conditions.Add(new FilterRule { Field = RuleField.Extension, Operator = RuleOperator.Is, Value = "mp3" });

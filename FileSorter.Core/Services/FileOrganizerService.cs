@@ -130,7 +130,10 @@ public class FileOrganizerService
     /// </summary>
     public static IReadOnlyList<PlannedGroup> Plan(IReadOnlyList<FileItem> files, OrganizeRequest request)
     {
-        var target = request.TargetFolder;
+        // Canonical target so rule folders (normalized) and method folders share keys
+        var target = string.IsNullOrWhiteSpace(request.TargetFolder)
+            ? request.TargetFolder
+            : PathKey.Normalize(request.TargetFolder);
         var groups = new Dictionary<string, (IReadOnlyList<string> Segments, List<FileItem> Files)>(
             StringComparer.OrdinalIgnoreCase);
         var order = new List<string>();
@@ -173,11 +176,21 @@ public class FileOrganizerService
         return order.Select(path => new PlannedGroup(path, groups[path].Segments, groups[path].Files)).ToList();
     }
 
-    /// <summary>Relative folders under the target; a folder elsewhere is shown as one full-path node.</summary>
-    private static IReadOnlyList<string> RuleDisplaySegments(string folder, string target) =>
-        PathKey.IsUnder(folder, target)
-            ? Path.GetRelativePath(target, folder).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+    /// <summary>
+    /// Relative folders under the target; the target itself is ".", a folder elsewhere is shown
+    /// as one full-path node. With no target, relative folders are shown as they are.
+    /// </summary>
+    private static IReadOnlyList<string> RuleDisplaySegments(string folder, string target)
+    {
+        char[] separators = [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar];
+        if (string.IsNullOrWhiteSpace(target))
+            return Path.IsPathFullyQualified(folder) ? [folder] : folder.Split(separators);
+        if (PathKey.Equal(folder, target))
+            return ["."];
+        return PathKey.IsUnder(folder, target)
+            ? Path.GetRelativePath(target, folder).Split(separators)
             : [folder];
+    }
 
     public ObservableCollection<PreviewItem> GeneratePreview(IReadOnlyList<FileItem> files, OrganizeRequest request)
     {

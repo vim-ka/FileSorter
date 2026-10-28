@@ -7,11 +7,19 @@ public class RoutingRule
     public bool MatchAll { get; set; } = true;
     public string Destination { get; set; } = "";
 
-    /// <summary>Immutable copy for background evaluation; null if the rule is off or has no destination.</summary>
-    public RoutingRuleSnapshot? Snapshot() =>
-        !IsEnabled || string.IsNullOrWhiteSpace(Destination)
-            ? null
-            : new RoutingRuleSnapshot(Conditions.Select(c => c.Snapshot()).ToList(), MatchAll, Destination.Trim());
+    /// <summary>
+    /// Immutable copy for background evaluation; null if the rule is off or its destination is
+    /// empty or invalid (drive-relative like <c>D:Movies</c>, which is neither a subfolder nor a full path).
+    /// </summary>
+    public RoutingRuleSnapshot? Snapshot()
+    {
+        if (!IsEnabled || string.IsNullOrWhiteSpace(Destination)) return null;
+        var destination = Destination.Trim();
+        if (!Path.IsPathFullyQualified(destination)
+            && Path.IsPathRooted(RoutingRuleSnapshot.TrimLeadingSeparators(destination)))
+            return null;
+        return new RoutingRuleSnapshot(Conditions.Select(c => c.Snapshot()).ToList(), MatchAll, destination);
+    }
 }
 
 /// <summary>Thread-safe routing rule: conditions plus the folder matching files go to.</summary>
@@ -25,11 +33,24 @@ public sealed record RoutingRuleSnapshot(
         return MatchAll ? Conditions.All(c => c.Matches(file)) : Conditions.Any(c => c.Matches(file));
     }
 
-    /// <summary>A fully qualified destination is used as is; otherwise it is a subfolder of the target.</summary>
+    /// <summary>
+    /// A fully qualified destination is used as is; anything else is a subfolder of the target
+    /// (leading separators are ignored, so <c>/Movies</c> never escapes to the drive root).
+    /// The result is normalized (<c>.\Movies</c>, <c>Movies\..\Movies</c> → <c>target\Movies</c>);
+    /// with an empty target the relative path is returned as is.
+    /// </summary>
     public string ResolveFolder(string targetFolder)
     {
         var dest = Destination.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
-        return Path.TrimEndingDirectorySeparator(
-            Path.IsPathFullyQualified(dest) ? dest : Path.Combine(targetFolder, dest));
+        if (Path.IsPathFullyQualified(dest))
+            return Path.TrimEndingDirectorySeparator(Path.GetFullPath(dest));
+
+        var relative = TrimLeadingSeparators(dest);
+        if (string.IsNullOrWhiteSpace(targetFolder))
+            return Path.TrimEndingDirectorySeparator(relative);
+        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(targetFolder, relative)));
     }
+
+    internal static string TrimLeadingSeparators(string path) =>
+        path.TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 }

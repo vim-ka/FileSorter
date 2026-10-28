@@ -22,7 +22,11 @@ public sealed record OrganizeRequest(
     /// <summary>Where groups are created: the destination folder if set, else the source folder.</summary>
     public string TargetFolder => string.IsNullOrEmpty(DestinationFolder) ? SourceFolder : DestinationFolder;
 
-    /// <summary>Snapshots the profile. Call on the UI thread; the result shares no mutable state with it.</summary>
+    /// <summary>
+    /// Snapshots the profile on the UI thread: the profile's lists (disabled categories, rules)
+    /// are copied, so later profile edits don't affect the request. The <see cref="FileCategory"/>
+    /// objects themselves are shared, not cloned; only their names and extensions are read.
+    /// </summary>
     public static OrganizeRequest FromProfile(FolderProfile p, IReadOnlyList<FileCategory> categories) => new(
         p.FullPath,
         string.IsNullOrEmpty(p.DestinationFolder) ? null : p.DestinationFolder,
