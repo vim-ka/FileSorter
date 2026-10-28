@@ -219,6 +219,60 @@ public sealed class AutoOrganizeEngineTests : TempDataDirTest, IDisposable
     }
 
     [Fact]
+    public async Task Defer_DuringPendingDebounce_PostponesTheRun()
+    {
+        var debounce = TimeSpan.FromMilliseconds(600);
+        var dir = NewFolder("A");
+        using var engine = new EngineWithOptions(this, new AutoOrganizeOptions(debounce, TimeSpan.Zero, debounce));
+        var profile = AutoProfile(dir, onNewFiles: false);
+        await _ui.RunAsync(() => { engine.Engine.Configure([], false); engine.Engine.Configure([profile], false); });
+        var file = TestData.WriteFile(dir, "a.txt");
+
+        await _ui.RunAsync(() => engine.Engine.NotifyChanged(dir)); // due at ~600 ms
+        await Task.Delay(400);
+        await _ui.RunAsync(() => engine.Engine.Defer(dir));         // now due at ~1000 ms
+        await Task.Delay(400);                                       // ~800 ms: past the original due time
+
+        Assert.Equal(0, RunCount);
+        Assert.True(File.Exists(file));
+
+        await Wait.UntilAsync(() => RunCount == 1);
+        Assert.False(File.Exists(file));
+    }
+
+    [Fact]
+    public async Task Defer_ScheduledRunDueSoon_WaitsForQuiet()
+    {
+        var dir = NewFolder("A");
+        var file = TestData.WriteFile(dir, "a.txt");
+        var debounce = TimeSpan.FromMilliseconds(800);
+        var engine = new AutoOrganizeEngine(_organizer, _journal, _gate, _ui,
+            new AutoOrganizeOptions(debounce, TimeSpan.Zero, debounce), _ => TimeSpan.FromMilliseconds(300));
+        var runs = 0;
+        engine.RunCompleted += (_, _) => Interlocked.Increment(ref runs);
+        var profile = AutoProfile(dir, onNewFiles: false);
+        profile.Auto.ScheduleEnabled = true;
+        try
+        {
+            await _ui.RunAsync(() =>
+            {
+                engine.Configure([], false);
+                engine.Configure([profile], false); // first tick at ~300 ms
+                engine.Defer(dir);                  // edits until ~800 ms
+            });
+            await Task.Delay(600);
+
+            Assert.Equal(0, Volatile.Read(ref runs));
+            await Wait.UntilAsync(() => Volatile.Read(ref runs) == 1);
+            Assert.False(File.Exists(file));
+        }
+        finally
+        {
+            await _ui.RunAsync(() => engine.Dispose());
+        }
+    }
+
+    [Fact]
     public async Task Run_FilesItPlacedInWatchedRoot_Ignored()
     {
         var a = NewFolder("A");

@@ -500,4 +500,40 @@ public sealed class MainViewModelAutoTests : TempDataDirTest
         var saved = await HistoryService.LoadAsync();
         Assert.Equal(left, saved.Sum(op => op.Moves.Count));
     }
+
+    [Fact]
+    public async Task ProfileEdit_SavedAfterEditsSettle()
+    {
+        var dir = NewFolder("A");
+        await _host.Run(async () =>
+        {
+            var vm = _host.NewVm();
+            _host.AddFolder(vm, dir);
+            await Wait.UntilAsync(() => SettingsService.Load().Folders.Count == 1);
+
+            vm.DestinationSubfolderPattern = "#y";
+            vm.DestinationSubfolderPattern = "#year";
+            vm.AddRuleCommand.Execute(null);
+            vm.Rules[0].Destination = "Big";
+
+            await Wait.UntilAsync(() => SavedProfile(dir) is { Template: "#year", Rules: [{ Destination: "Big" }] });
+        });
+    }
+
+    [Fact]
+    public async Task ProfileEdit_OfAutoFolder_DefersItsRuns()
+    {
+        var dir = NewFolder("A");
+        await _host.Run(() =>
+        {
+            var vm = _host.NewVm();
+            _host.AddFolder(vm, dir);
+            vm.AutoEnabled = true;
+            Assert.False(vm.Engine.IsDeferred(dir));
+
+            vm.DestinationSubfolderPattern = "#ye";
+
+            Assert.True(vm.Engine.IsDeferred(dir));
+        });
+    }
 }

@@ -119,6 +119,24 @@ public sealed class AutoOrganizeEngine : IDisposable
     }
 
     /// <summary>
+    /// The folder's profile is being edited (possibly half-typed): its pending or scheduled run
+    /// waits until the edits have been quiet for a debounce interval. Explicit runs
+    /// (<see cref="RunNowAsync"/>) are not deferred.
+    /// </summary>
+    public void Defer(string folder)
+    {
+        if (_disposed || string.IsNullOrWhiteSpace(folder)) return;
+        if (!_folders.TryGetValue(PathKey.Normalize(folder), out var state)) return;
+        state.DeferredUntil = DateTime.UtcNow + _options.Debounce;
+        if (state.PendingTimer != null)
+            SetPending(state, _options.Debounce);
+    }
+
+    /// <summary>For tests: a <see cref="Defer"/> of the folder is still in effect.</summary>
+    internal bool IsDeferred(string folder) =>
+        _folders.TryGetValue(PathKey.Normalize(folder), out var state) && state.DeferredUntil > DateTime.UtcNow;
+
+    /// <summary>
     /// Organizes the folder's root now. Null when the folder isn't active, is missing, is busy
     /// (then retried after the debounce) or had nothing ready.
     /// </summary>
@@ -266,8 +284,18 @@ public sealed class AutoOrganizeEngine : IDisposable
             if (!IsLive(state) || version != state.PendingVersion) return;
             state.PendingTimer?.Dispose();
             state.PendingTimer = null;
-            StartRun(state);
+            StartRunUnlessDeferred(state);
         }), null, ClampDelay(delay, MinRetryDelay), Timeout.InfiniteTimeSpan);
+    }
+
+    /// <summary>A due debounce, retry or schedule run; postponed while the profile was edited recently (<see cref="Defer"/>).</summary>
+    private void StartRunUnlessDeferred(FolderState state)
+    {
+        var wait = state.DeferredUntil - DateTime.UtcNow;
+        if (wait > TimeSpan.Zero)
+            SetPending(state, wait);
+        else
+            StartRun(state);
     }
 
     private void ConfigureSchedule(FolderState state)
@@ -286,7 +314,7 @@ public sealed class AutoOrganizeEngine : IDisposable
         state.ScheduleInterval = interval;
         state.ScheduleTimer = new Timer(_ => Post(() =>
         {
-            if (IsLive(state)) StartRun(state);
+            if (IsLive(state)) StartRunUnlessDeferred(state);
         }), null, interval, interval);
     }
 
@@ -368,6 +396,8 @@ public sealed class AutoOrganizeEngine : IDisposable
         public int PendingVersion;
         public Timer? ScheduleTimer;
         public TimeSpan ScheduleInterval;
+        /// <summary>No debounce/retry/schedule run before this (UTC); see <see cref="Defer"/>.</summary>
+        public DateTime DeferredUntil;
 
         public void StopWatcher()
         {

@@ -107,7 +107,33 @@ public partial class MainViewModel : ObservableObject
         if (EqualityComparer<T>.Default.Equals(current, value)) return false;
         assign(_profile, value);
         OnPropertyChanged(propertyName);
+        OnProfileEdited();
         return true;
+    }
+
+    /// <summary>Quiet time after the last profile edit before it is saved.</summary>
+    internal static TimeSpan ProfileSaveDelay { get; set; } = TimeSpan.FromSeconds(1.5);
+
+    private int _profileSaveVersion;
+
+    /// <summary>
+    /// Any edit of the selected folder's profile (text fields update per keystroke): a pending or
+    /// scheduled auto run of the folder waits until the edits are quiet, so it never uses a
+    /// half-typed value, and the profile is saved once the edits settle — auto runs use it, so it
+    /// must survive a crash.
+    /// </summary>
+    private void OnProfileEdited()
+    {
+        if (_selectedFolder == null || _isShutDown) return; // the throwaway profile is never used
+        _engine.Defer(_profile.FullPath);
+        _ = SaveProfileAfterQuietAsync(++_profileSaveVersion);
+    }
+
+    private async Task SaveProfileAfterQuietAsync(int version)
+    {
+        await Task.Delay(ProfileSaveDelay); // resumes on the UI thread
+        if (version == _profileSaveVersion)
+            SaveSettingsInBackground();
     }
 
     public string? DestinationFolder
@@ -565,6 +591,7 @@ public partial class MainViewModel : ObservableObject
                 _profile.DisabledCategories.RemoveAll(n => n == vm.Name);
                 if (!vm.IsSelected)
                     _profile.DisabledCategories.Add(vm.Name);
+                OnProfileEdited();
                 RefreshPreviewDeferred();
             };
             Categories.Add(vm);
@@ -626,6 +653,7 @@ public partial class MainViewModel : ObservableObject
 
     private void OnRulesChanged()
     {
+        OnProfileEdited();
         OnPropertyChanged(nameof(RulesActiveText));
         RaiseAutoWarnings();
         RefreshPreviewDeferred();
