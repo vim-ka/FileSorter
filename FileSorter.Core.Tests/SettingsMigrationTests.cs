@@ -163,8 +163,20 @@ public class SettingsMigrationTests : TempDataDirTest
     [Fact]
     public async Task SaveInBackground_OlderSaveFinishingLate_DoesNotOverwriteNewer()
     {
-        var older = SettingsService.SaveInBackground(new AppSettings { StartWithWindows = false });
-        SettingsService.Save(new AppSettings { StartWithWindows = true });
+        // Holding the write lock forces the order: the older background write can only run after the
+        // newer synchronous save (which re-enters the lock on this thread) has reached the disk.
+        Task older;
+        Monitor.Enter(SettingsService.WriteLock);
+        try
+        {
+            older = SettingsService.SaveInBackground(new AppSettings { StartWithWindows = false });
+            SettingsService.Save(new AppSettings { StartWithWindows = true });
+            Assert.False(older.IsCompleted);
+        }
+        finally
+        {
+            Monitor.Exit(SettingsService.WriteLock);
+        }
         await older;
 
         Assert.True(SettingsService.Load().StartWithWindows);

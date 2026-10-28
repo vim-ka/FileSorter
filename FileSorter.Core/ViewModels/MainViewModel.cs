@@ -352,7 +352,6 @@ public partial class MainViewModel : ObservableObject
         _engine = new AutoOrganizeEngine(_organizer, _organizer.Journal, _gate, dispatcher, _autoOptions);
         _engine.RunCompleted += OnAutoRunCompleted;
         _gate.Changed += _ => OnGateChanged();
-        OperationsUndone += PauseAutoOfUndoneFolders;
 
         AddFolderCommand = new RelayCommand(_ => AddFolder(), _ => !IsOrganizing);
         SelectDestinationCommand = new RelayCommand(_ => SelectDestinationFolder());
@@ -1134,6 +1133,9 @@ public partial class MainViewModel : ObservableObject
                     }
                     try
                     {
+                        // Pause before the files come back and before the gate is released, or a pending
+                        // auto run (schedule, debounce, the undo's own watcher events) would re-sort them
+                        if (gated) PauseAutoForUndo(source);
                         var progressReporter = new Progress<int>(p => Progress = p);
                         var result = await _organizer.UndoOperationAsync(operation, progressReporter);
                         restored += result.Restored;

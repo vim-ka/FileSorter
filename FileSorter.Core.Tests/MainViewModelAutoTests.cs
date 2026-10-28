@@ -170,6 +170,87 @@ public sealed class MainViewModelAutoTests : TempDataDirTest
     }
 
     [Fact]
+    public async Task Undo_AutoRunStartingAsSoonAsTheGateFrees_DoesNotResortRestoredFiles()
+    {
+        var dir = NewFolder("Downloads");
+        var files = new[] { OldFile(dir, "a.txt"), OldFile(dir, "b.txt") };
+
+        await _host.Run(async () =>
+        {
+            var vm = _host.NewVm();
+            _host.AddFolder(vm, dir);
+            vm.AutoEnabled = true;
+            await Wait.UntilAsync(() => vm.HistoryItems.Count == 1 && !vm.Gate.IsBusy(dir)
+                                        && vm.UndoOperationCommand.CanExecute(vm.HistoryItems[0]));
+            var op = vm.HistoryItems[0];
+
+            // Stands in for a schedule tick / debounce / watcher run firing the moment the undo
+            // releases the folder (restored files keep their old mtime, so they are "stable").
+            var armed = true;
+            var pausedWhenFreed = false;
+            Task<OrganizeOperation?>? raced = null;
+            vm.Gate.Changed += _ =>
+            {
+                if (!armed || vm.Gate.IsBusy(dir)) return;
+                armed = false;
+                pausedWhenFreed = vm.SelectedFolder!.Profile.Auto.IsPaused
+                                  && vm.SelectedFolder.AutoStatus == AutoStatus.Paused;
+                raced = vm.Engine.RunNowAsync(dir);
+            };
+
+            vm.UndoOperationCommand.Execute(op);
+
+            await Wait.UntilAsync(() => raced is { IsCompleted: true } && op.IsUndone && !vm.IsOrganizing);
+            Assert.True(pausedWhenFreed, "the folder must be paused before the undo releases it");
+            Assert.Null(await raced!);
+            Assert.All(files, f => Assert.True(File.Exists(f)));
+            Assert.True(vm.AutoIsPaused);
+            Assert.Equal(AutoStatus.Paused, vm.SelectedFolder!.AutoStatus);
+        });
+    }
+
+    [Fact]
+    public async Task EnablingAuto_ClearsPauseAndRuns()
+    {
+        var dir = NewFolder("Downloads");
+        var file = OldFile(dir, "a.txt");
+        var profile = FolderProfile.CreateDefault(dir);
+        profile.Auto.IsPaused = true; // paused earlier, then auto was turned off
+        SeedSettings(false, profile);
+
+        await _host.Run(async () =>
+        {
+            var vm = _host.NewVm();
+            var folder = vm.Folders.Single();
+            vm.SelectedFolder = folder;
+            Assert.Equal(AutoStatus.Off, folder.AutoStatus);
+
+            vm.AutoEnabled = true;
+
+            Assert.False(folder.Profile.Auto.IsPaused);
+            Assert.False(vm.AutoIsPaused);
+            Assert.Equal(AutoStatus.On, folder.AutoStatus);
+            await Wait.UntilAsync(() => File.Exists(Path.Combine(dir, "Documents", "a.txt")));
+            Assert.False(File.Exists(file));
+            await Wait.UntilAsync(() => SavedProfile(dir).Auto is { Enabled: true, IsPaused: false });
+        });
+    }
+
+    [Fact]
+    public void AutoNotificationMessage_CountsMovedFilesNotDuplicates_SingularForOne()
+    {
+        static OrganizeOperation Op(params bool[] duplicates) => new()
+        {
+            Moves = [.. duplicates.Select(d => new FileMove { WasDuplicate = d })]
+        };
+
+        Assert.Equal("Downloads: 1 file organized",
+            MainViewModel.AutoNotificationMessage("Downloads", [Op(false, true)]));
+        Assert.Equal("Downloads: 3 files organized",
+            MainViewModel.AutoNotificationMessage("Downloads", [Op(false, false), Op(true, false)]));
+    }
+
+    [Fact]
     public async Task AutoRunInSelectedFolder_RefreshesFiles()
     {
         var dir = NewFolder("Downloads");

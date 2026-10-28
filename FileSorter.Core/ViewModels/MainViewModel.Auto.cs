@@ -16,13 +16,18 @@ public partial class MainViewModel
     /// <summary>For tests: the gate shared by manual runs and the engine.</summary>
     internal FolderGate Gate => _gate;
 
+    /// <summary>For tests: the auto-organize engine (use on the UI thread only).</summary>
+    internal AutoOrganizeEngine Engine => _engine;
+
     public bool AutoEnabled
     {
         get => _profile.Auto.Enabled;
         set
         {
             if (!SetProfileValue(_profile.Auto.Enabled, value, (p, v) => p.Auto.Enabled = v)) return;
-            // Turning auto on organizes what is already there (the engine checks only at startup)
+            // Turning auto on is an explicit "go": it lifts an earlier pause (like Resume) and organizes
+            // what is already there (the engine checks only at startup)
+            if (value) _profile.Auto.IsPaused = false;
             OnAutoSettingsChanged(value && _selectedFolder != null ? [_selectedFolder] : []);
         }
     }
@@ -199,18 +204,17 @@ public partial class MainViewModel
         OnAutoSettingsChanged([folder]);
     }
 
-    /// <summary>Undoing an operation pauses the auto-organize of its folder, or it would redo it at once.</summary>
-    private void PauseAutoOfUndoneFolders(IReadOnlyList<OrganizeOperation> undone)
+    /// <summary>
+    /// Undoing an operation pauses the auto-organize of its folder, or it would redo it at once. Called
+    /// while the undo holds the folder's gate, before files are restored: the engine is reconfigured
+    /// (watcher, schedule and pending runs of the folder stopped) before any auto run could start.
+    /// </summary>
+    private void PauseAutoForUndo(string sourceFolder)
     {
-        var paused = false;
-        foreach (var source in undone.Select(op => op.SourceFolder).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct())
-        {
-            var folder = Folders.FirstOrDefault(f => PathKey.Equal(f.FullPath, source));
-            if (folder is not { Profile.Auto: { Enabled: true, IsPaused: false } }) continue;
-            folder.Profile.Auto.IsPaused = true;
-            paused = true;
-        }
-        if (paused) OnAutoSettingsChanged([]);
+        var folder = Folders.FirstOrDefault(f => PathKey.Equal(f.FullPath, sourceFolder));
+        if (folder is not { Profile.Auto: { Enabled: true, IsPaused: false } }) return;
+        folder.Profile.Auto.IsPaused = true;
+        OnAutoSettingsChanged([]);
     }
 
     private bool IsFolderBusy(string folder) => !string.IsNullOrWhiteSpace(folder) && _gate.IsBusy(folder);
@@ -266,9 +270,8 @@ public partial class MainViewModel
     {
         var name = Folders.FirstOrDefault(f => PathKey.Equal(f.FullPath, folderKey))?.Name
                    ?? FolderProfile.CreateDefault(folderKey).Name;
-        var count = operations.Sum(op => op.Moves.Count);
         var ops = operations.ToList();
-        _notifications.ShowAutoOrganized(NotificationTitle, $"{name}: {count} files organized",
+        _notifications.ShowAutoOrganized(NotificationTitle, AutoNotificationMessage(name, ops),
             () => _ = _dispatcher.InvokeAsync(() =>
             {
                 if (_isShutDown) return;
@@ -277,5 +280,12 @@ public partial class MainViewModel
                 else
                     _ = UndoOperationsAsync(() => ops.Where(_organizer.CanUndoOperation).Reverse().ToList());
             }));
+    }
+
+    /// <summary>"Downloads: 3 files organized" — files moved or copied, not duplicates (as in the history description).</summary>
+    internal static string AutoNotificationMessage(string folderName, IReadOnlyList<OrganizeOperation> operations)
+    {
+        var count = operations.Sum(op => op.Moves.Count(m => !m.WasDuplicate));
+        return $"{folderName}: {count} {(count == 1 ? "file" : "files")} organized";
     }
 }

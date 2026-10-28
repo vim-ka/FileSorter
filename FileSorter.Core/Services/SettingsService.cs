@@ -72,7 +72,8 @@ public static class SettingsService
     private const int WriteAttempts = 5;
     private const int RetryDelayMs = 50;
 
-    private static readonly object WriteLock = new();
+    /// <summary>Serializes writes; internal so tests can force a write order (re-entrant on the holding thread).</summary>
+    internal static readonly object WriteLock = new();
     private static long _lastQueued;
     private static long _lastWritten;
 
