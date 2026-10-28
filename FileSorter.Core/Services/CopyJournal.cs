@@ -22,6 +22,20 @@ public class CopyJournal
 
     private readonly object _gate = new();
     private readonly Dictionary<(string Source, string Path), Entry> _entries = [];
+    private readonly Func<Task<List<Entry>>> _load;
+    private Task _loadTask = Task.CompletedTask;
+
+    public CopyJournal() : this(() => Task.Run(() => JsonFileStore.Load<List<Entry>>(JournalFile) ?? [])) { }
+
+    /// <summary>For tests: replaces reading the journal file.</summary>
+    internal CopyJournal(Func<Task<List<Entry>>> load) => _load = load;
+
+    /// <summary>
+    /// Completes when the latest <see cref="ReloadAsync"/> has finished (at once if none was
+    /// started). Readers that decide what to copy must await it, or a run started right after
+    /// launch would see an empty journal and copy everything again.
+    /// </summary>
+    public Task WhenLoaded => _loadTask;
 
     public static async Task<CopyJournal> LoadAsync()
     {
@@ -31,9 +45,11 @@ public class CopyJournal
     }
 
     /// <summary>Replaces the in-memory entries with those persisted on disk.</summary>
-    public async Task ReloadAsync()
+    public Task ReloadAsync() => _loadTask = ReloadCoreAsync();
+
+    private async Task ReloadCoreAsync()
     {
-        var loaded = await Task.Run(() => JsonFileStore.Load<List<Entry>>(JournalFile) ?? []);
+        var loaded = await _load().ConfigureAwait(false);
         lock (_gate)
         {
             _entries.Clear();

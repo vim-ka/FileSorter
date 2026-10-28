@@ -143,6 +143,11 @@ public sealed class AutoOrganizeEngine : IDisposable
     private async Task<OrganizeOperation?> RunAsync(FolderState state)
     {
         if (!IsLive(state)) return null;
+        // Copy-mode candidates are filtered by the journal: never decide before it has been read
+        try { await _journal.WhenLoaded; }
+        catch (Exception) { /* an unreadable journal loads as empty */ }
+        if (!IsLive(state)) return null;
+
         var root = state.Key;
         if (!Directory.Exists(root)) return null;
 

@@ -178,6 +178,47 @@ public sealed class AutoOrganizeEngineTests : TempDataDirTest, IDisposable
     }
 
     [Fact]
+    public async Task Run_CopyMode_WaitsForDelayedJournalLoad_DoesNotRecopy()
+    {
+        var dir = NewFolder("A");
+        var file = TestData.WriteFile(dir, "a.txt");
+        var info = new FileInfo(file);
+        var loadGate = new TaskCompletionSource<List<CopyJournal.Entry>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var journal = new CopyJournal(() => loadGate.Task);
+        var engine = new AutoOrganizeEngine(new FileOrganizerService(journal), journal, new FolderGate(), _ui,
+            new AutoOrganizeOptions(Debounce, TimeSpan.Zero, Debounce));
+        var profile = AutoProfile(dir, onNewFiles: false);
+        profile.CopyMode = true;
+        try
+        {
+            // As at startup: the journal load is still running when the first auto run starts
+            var load = journal.ReloadAsync();
+            await _ui.RunAsync(() => engine.Configure([profile], false));
+            await Quiet();
+            Assert.False(Directory.Exists(Path.Combine(dir, "Documents")));
+
+            loadGate.SetResult(
+            [
+                new CopyJournal.Entry
+                {
+                    SourceFolder = dir, Path = file, Size = info.Length, LastWriteTimeUtc = info.LastWriteTimeUtc
+                }
+            ]);
+            await load;
+            var op = await _ui.RunAsync(() => engine.RunNowAsync(dir));
+            await Quiet();
+
+            Assert.True(op == null || op.Moves.Count == 0);
+            Assert.False(Directory.Exists(Path.Combine(dir, "Documents")));
+            Assert.True(journal.Contains(dir, TestData.ItemFromDisk(file))); // not pruned by the early run
+        }
+        finally
+        {
+            await _ui.RunAsync(() => engine.Dispose());
+        }
+    }
+
+    [Fact]
     public async Task Run_FilesItPlacedInWatchedRoot_Ignored()
     {
         var a = NewFolder("A");
