@@ -46,12 +46,8 @@ public class FilterRuleViewModel : ObservableObject
 
     public Array AvailableFields => Enum.GetValues(typeof(RuleField));
 
-    public RuleOperator[] AvailableOperators => Field switch
-    {
-        RuleField.DateCreated or RuleField.DateModified => [RuleOperator.LastDays, RuleOperator.GreaterThan, RuleOperator.LessThan],
-        RuleField.Size => [RuleOperator.GreaterThan, RuleOperator.LessThan],
-        _ => [RuleOperator.Contains, RuleOperator.Is, RuleOperator.StartsWith, RuleOperator.EndsWith]
-    };
+    /// <summary>Only operators that can be evaluated for the field; dates support "last N days" only.</summary>
+    public RuleOperator[] AvailableOperators => FilterRuleSnapshot.OperatorsFor(Field);
 
     public event Action? RemoveRequested;
     public ICommand RemoveCommand { get; }

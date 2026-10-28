@@ -122,6 +122,25 @@ public class RulesEditorTests : TempDataDirTest
     });
 
     [Fact]
+    public Task RulesActiveText_UnparsableSizeValue_StaysOff() => _host.Run(() =>
+    {
+        var vm = NewVm();
+        AddFolder(vm, TestData.NewTempDir("A"));
+        vm.AddRuleCommand.Execute(null);
+        var rule = vm.Rules.Single();
+        rule.Destination = "Big";
+        var condition = rule.Conditions.Single();
+        condition.Field = RuleField.Size;
+        condition.Operator = RuleOperator.GreaterThan;
+
+        condition.Value = "abc";
+        Assert.Equal("", vm.RulesActiveText);
+
+        condition.Value = "1,5";
+        Assert.Equal("RULES ON", vm.RulesActiveText);
+    });
+
+    [Fact]
     public Task Conditions_WriteIntoTheRuleModel() => _host.Run(() =>
     {
         var vm = NewVm();

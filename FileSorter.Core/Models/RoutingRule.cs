@@ -10,12 +10,14 @@ public class RoutingRule
     /// <summary>
     /// Immutable copy for background evaluation; null if the rule is off, its destination is
     /// empty or invalid (drive-relative like <c>D:Movies</c>, which is neither a subfolder nor a full path),
-    /// or any condition is incomplete (blank value). A rule without conditions matches every file.
+    /// or any condition can't be evaluated (blank or unparsable value, operator not supported for the
+    /// field — see <see cref="FilterRule.IsEvaluable"/>): such a rule must never route every file.
+    /// A rule without conditions matches every file.
     /// </summary>
     public RoutingRuleSnapshot? Snapshot()
     {
         if (!IsEnabled || string.IsNullOrWhiteSpace(Destination)) return null;
-        if (Conditions.Any(c => string.IsNullOrWhiteSpace(c.Value))) return null;
+        if (Conditions.Any(c => !c.IsEvaluable)) return null;
         var destination = Destination.Trim();
         if (!Path.IsPathFullyQualified(destination)
             && Path.IsPathRooted(RoutingRuleSnapshot.TrimLeadingSeparators(destination)))
