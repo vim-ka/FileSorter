@@ -417,6 +417,20 @@ public sealed class AutoOrganizeEngineTests : TempDataDirTest, IDisposable
     }
 
     [Fact]
+    public async Task Watcher_FolderMissingAtStartup_RebuiltOnTheNextRun()
+    {
+        var dir = Path.Combine(TempDir, "Later");
+        await ConfigureWithoutStartupRun(AutoProfile(dir)); // no folder, no watcher
+
+        Directory.CreateDirectory(dir);
+        Assert.Null(await RunNow(dir)); // nothing to do, but the watcher is set up now
+
+        var file = TestData.WriteFile(dir, "a.txt");
+        await Wait.UntilAsync(() => RunCount == 1);
+        Assert.False(File.Exists(file));
+    }
+
+    [Fact]
     public async Task Configure_Disabled_StopsWatching()
     {
         var dir = NewFolder("A");

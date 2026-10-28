@@ -7,7 +7,10 @@ namespace FileSorter.Services;
 /// program, or next to a download in progress) — worth checking again after the stability window.</param>
 public sealed record CandidateResult(IReadOnlyList<FileItem> Ready, bool HasPending);
 
-/// <summary>Decides which root files auto-organize may take right now. Pure apart from <c>isLocked</c>.</summary>
+/// <summary>
+/// Decides which root files auto-organize may take right now: <see cref="Select"/> (pure), then the
+/// run plans those and <see cref="DropLocked"/> opens only the files the plan would move or copy.
+/// </summary>
 public static class AutoOrganizeCandidates
 {
     /// <summary>Extensions of downloads in progress (Chrome/Edge, Firefox, Safari, Opera, generic).</summary>
@@ -16,9 +19,8 @@ public static class AutoOrganizeCandidates
 
     /// <param name="rootFiles">Files in the folder root.</param>
     /// <param name="isProcessed">Already handled and unchanged (copy journal, files the engine placed here) — skipped silently.</param>
-    /// <param name="isLocked">Open in another program; called last, only for otherwise ready files.</param>
     public static CandidateResult Select(IReadOnlyList<FileItem> rootFiles, DateTime nowUtc, TimeSpan stability,
-        Func<FileItem, bool> isProcessed, Func<string, bool> isLocked)
+        Func<FileItem, bool> isProcessed)
     {
         // Downloads in progress, by full path, with whether they are still being written
         var partials = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
@@ -44,7 +46,7 @@ public static class AutoOrganizeCandidates
                 continue;
             }
 
-            if (IsChanging(file, nowUtc, stability) || isLocked(file.FullPath))
+            if (IsChanging(file, nowUtc, stability))
             {
                 hasPending = true;
                 continue;
@@ -53,6 +55,35 @@ public static class AutoOrganizeCandidates
             ready.Add(file);
         }
 
+        return new CandidateResult(ready, hasPending);
+    }
+
+    /// <summary>
+    /// Keeps the planned files that would actually move or copy (not those already where they
+    /// belong) and are not open in another program. Locked files are pending: retried next time.
+    /// Files the plan leaves alone (not in it) are never opened.
+    /// </summary>
+    /// <param name="selection">Result of <see cref="Select"/>.</param>
+    /// <param name="plan">Plan of <c>selection.Ready</c>.</param>
+    /// <param name="isLocked">Open in another program (see <see cref="IsLocked"/>).</param>
+    public static CandidateResult DropLocked(CandidateResult selection, IReadOnlyList<PlannedGroup> plan,
+        Func<string, bool> isLocked)
+    {
+        var ready = new List<FileItem>();
+        var hasPending = selection.HasPending;
+        foreach (var group in plan)
+        {
+            foreach (var file in group.Files)
+            {
+                if (PathKey.Equal(Path.Combine(group.FolderPath, file.FileName), file.FullPath)) continue;
+                if (isLocked(file.FullPath))
+                {
+                    hasPending = true;
+                    continue;
+                }
+                ready.Add(file);
+            }
+        }
         return new CandidateResult(ready, hasPending);
     }
 

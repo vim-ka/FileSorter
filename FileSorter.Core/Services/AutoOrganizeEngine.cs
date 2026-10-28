@@ -168,6 +168,7 @@ public sealed class AutoOrganizeEngine : IDisposable
 
         var root = state.Key;
         if (!Directory.Exists(root)) return null;
+        EnsureWatcher(state);
 
         if (!_gate.TryEnter(root))
         {
@@ -190,13 +191,19 @@ public sealed class AutoOrganizeEngine : IDisposable
             var placed = TakePlacedSnapshot(root, files);
 
             var stability = _options.Stability;
-            var selection = await Task.Run(() => AutoOrganizeCandidates.Select(files, DateTime.UtcNow, stability,
-                f => placed.Contains(f.FullPath) || (copyMode && _journal.Contains(root, f)),
-                AutoOrganizeCandidates.IsLocked));
+            var request = OrganizeRequest.FromProfile(profile, _categories);
+            var selection = await Task.Run(() =>
+            {
+                var candidates = AutoOrganizeCandidates.Select(files, DateTime.UtcNow, stability,
+                    f => placed.Contains(f.FullPath) || (copyMode && _journal.Contains(root, f)));
+                if (candidates.Ready.Count == 0) return candidates;
+                // Plan first: only files that would really move or copy are opened for the lock check
+                var plan = FileOrganizerService.Plan(candidates.Ready, request);
+                return AutoOrganizeCandidates.DropLocked(candidates, plan, AutoOrganizeCandidates.IsLocked);
+            });
             hasPending = selection.HasPending;
             if (!IsLive(state) || selection.Ready.Count == 0) return null;
 
-            var request = OrganizeRequest.FromProfile(profile, _categories);
             var run = RunContext.NewAuto();
             try
             {
@@ -314,7 +321,9 @@ public sealed class AutoOrganizeEngine : IDisposable
         state.ScheduleInterval = interval;
         state.ScheduleTimer = new Timer(_ => Post(() =>
         {
-            if (IsLive(state)) StartRunUnlessDeferred(state);
+            if (!IsLive(state)) return;
+            EnsureWatcher(state);
+            StartRunUnlessDeferred(state);
         }), null, interval, interval);
     }
 
@@ -328,7 +337,7 @@ public sealed class AutoOrganizeEngine : IDisposable
         if (state.Watcher != null && !state.WatcherFailed) return;
 
         state.StopWatcher();
-        if (!Directory.Exists(state.Key)) return; // retried on the next Configure
+        if (!Directory.Exists(state.Key)) return; // retried on the next Configure, run or schedule tick
 
         try
         {
@@ -342,7 +351,7 @@ public sealed class AutoOrganizeEngine : IDisposable
             watcher.Created += changed;
             watcher.Changed += changed;
             watcher.Renamed += (_, _) => Post(() => OnWatcherEvent(state));
-            // Overflow or the folder went away: events may be lost — run once, rebuild on the next Configure
+            // Overflow or the folder went away: events may be lost — run once (which rebuilds it)
             watcher.Error += (_, _) => Post(() =>
             {
                 if (!IsLive(state) || state.Watcher != watcher) return;
@@ -355,8 +364,18 @@ public sealed class AutoOrganizeEngine : IDisposable
         }
         catch (Exception e) when (e is ArgumentException or IOException or UnauthorizedAccessException or PlatformNotSupportedException)
         {
-            state.StopWatcher(); // retried on the next Configure
+            state.StopWatcher(); // retried on the next Configure, run or schedule tick
         }
+    }
+
+    /// <summary>
+    /// Rebuilds a watcher that failed (overflow, folder gone) or could not be created (folder missing
+    /// at startup), if the folder exists now. Cheap when the watcher is fine.
+    /// </summary>
+    private void EnsureWatcher(FolderState state)
+    {
+        if (IsLive(state) && state.Profile.Auto.OnNewFiles && (state.Watcher == null || state.WatcherFailed))
+            ConfigureWatcher(state);
     }
 
     private void OnWatcherEvent(FolderState state)
