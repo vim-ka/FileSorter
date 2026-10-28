@@ -264,11 +264,160 @@
                 <Border Grid.Row="2" Style="{StaticResource Card}">
                     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                         <StackPanel>
+                            <!-- Routing rules: checked top to bottom, the first match wins -->
+                            <TextBlock Text="Rules"
+                                       Foreground="{StaticResource SecondaryTextBrush}"
+                                       FontSize="12" FontWeight="SemiBold"
+                                       Margin="0,0,0,6"
+                                       ToolTip="Checked top to bottom; the first matching rule decides where a file goes" />
+
+                            <ItemsControl ItemsSource="{Binding Rules}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="{StaticResource TertiaryBackgroundBrush}"
+                                                CornerRadius="6" Padding="8" Margin="0,0,0,6">
+                                            <StackPanel>
+                                                <!-- On/off, destination, browse, order, remove -->
+                                                <Grid Margin="0,0,0,6">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+
+                                                    <CheckBox Grid.Column="0"
+                                                              Style="{StaticResource ModernCheckBox}"
+                                                              IsChecked="{Binding IsEnabled}"
+                                                              VerticalAlignment="Center"
+                                                              ToolTip="Rule enabled" />
+
+                                                    <TextBox Grid.Column="1"
+                                                             Text="{Binding Destination, UpdateSourceTrigger=PropertyChanged}"
+                                                             FontSize="12" Padding="6,4"
+                                                             Background="{StaticResource SecondaryBackgroundBrush}"
+                                                             Foreground="{StaticResource PrimaryTextBrush}"
+                                                             BorderBrush="{StaticResource BorderBrush}"
+                                                             BorderThickness="1"
+                                                             Margin="0,0,4,0"
+                                                             ToolTip="Destination: a subfolder of the target (Movies) or a full path (D:\Video)" />
+
+                                                    <Button Grid.Column="2"
+                                                            Style="{StaticResource IconButton}"
+                                                            Command="{Binding DataContext.BrowseRuleDestinationCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                            CommandParameter="{Binding}"
+                                                            Content="&#xE8B7;"
+                                                            FontSize="11" Padding="4"
+                                                            ToolTip="Browse for destination folder" />
+
+                                                    <Button Grid.Column="3"
+                                                            Style="{StaticResource IconButton}"
+                                                            Command="{Binding DataContext.MoveRuleUpCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                            CommandParameter="{Binding}"
+                                                            Content="&#xE74A;"
+                                                            FontSize="11" Padding="4"
+                                                            ToolTip="Move up" />
+
+                                                    <Button Grid.Column="4"
+                                                            Style="{StaticResource IconButton}"
+                                                            Command="{Binding DataContext.MoveRuleDownCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                            CommandParameter="{Binding}"
+                                                            Content="&#xE74B;"
+                                                            FontSize="11" Padding="4"
+                                                            ToolTip="Move down" />
+
+                                                    <Button Grid.Column="5"
+                                                            Style="{StaticResource IconButton}"
+                                                            Command="{Binding DataContext.RemoveRuleCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                            CommandParameter="{Binding}"
+                                                            Content="&#xE711;"
+                                                            FontSize="11" Padding="4"
+                                                            ToolTip="Remove rule" />
+                                                </Grid>
+
+                                                <!-- All / Any (the pair is grouped by its own panel) -->
+                                                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                                    <TextBlock Text="Match"
+                                                               Foreground="{StaticResource SecondaryTextBrush}"
+                                                               FontSize="12" VerticalAlignment="Center"
+                                                               Margin="0,0,8,0" />
+                                                    <RadioButton Content="All"
+                                                                 IsChecked="{Binding MatchAll}"
+                                                                 Foreground="{StaticResource PrimaryTextBrush}"
+                                                                 FontSize="12" VerticalAlignment="Center"
+                                                                 Margin="0,0,10,0" />
+                                                    <RadioButton Content="Any"
+                                                                 IsChecked="{Binding MatchAny}"
+                                                                 Foreground="{StaticResource PrimaryTextBrush}"
+                                                                 FontSize="12" VerticalAlignment="Center" />
+                                                </StackPanel>
+
+                                                <!-- Conditions -->
+                                                <ItemsControl ItemsSource="{Binding Conditions}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Grid Margin="0,0,0,4">
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="Auto" />
+                                                                    <ColumnDefinition Width="Auto" />
+                                                                    <ColumnDefinition Width="*" />
+                                                                    <ColumnDefinition Width="Auto" />
+                                                                </Grid.ColumnDefinitions>
+
+                                                                <ComboBox Grid.Column="0"
+                                                                          ItemsSource="{Binding AvailableFields}"
+                                                                          SelectedItem="{Binding Field}"
+                                                                          FontSize="11" Padding="4,3"
+                                                                          Margin="0,0,4,0"
+                                                                          MinWidth="75" />
+
+                                                                <ComboBox Grid.Column="1"
+                                                                          ItemsSource="{Binding AvailableOperators}"
+                                                                          SelectedItem="{Binding Operator}"
+                                                                          FontSize="11" Padding="4,3"
+                                                                          Margin="0,0,4,0"
+                                                                          MinWidth="75" />
+
+                                                                <TextBox Grid.Column="2"
+                                                                         Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
+                                                                         FontSize="12" Padding="6,4"
+                                                                         Background="{StaticResource SecondaryBackgroundBrush}"
+                                                                         Foreground="{StaticResource PrimaryTextBrush}"
+                                                                         BorderBrush="{StaticResource BorderBrush}"
+                                                                         BorderThickness="1"
+                                                                         Margin="0,0,4,0" />
+
+                                                                <Button Grid.Column="3"
+                                                                        Style="{StaticResource IconButton}"
+                                                                        Command="{Binding RemoveCommand}"
+                                                                        Content="&#xE711;"
+                                                                        FontFamily="Segoe MDL2 Assets"
+                                                                        FontSize="11" Padding="4"
+                                                                        ToolTip="Remove condition" />
+                                                            </Grid>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+
+                                                <Button Style="{StaticResource SecondaryButton}"
+                                                        Command="{Binding AddConditionCommand}"
+                                                        HorizontalAlignment="Left"
+                                                        Padding="8,3" Margin="0,2,0,0">
+                                                    <TextBlock Text="+ condition" FontFamily="Segoe UI" FontSize="11" />
+                                                </Button>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
                             <!-- Add Rule Button -->
                             <Button Style="{StaticResource SecondaryButton}"
                                     Command="{Binding AddRuleCommand}"
                                     HorizontalAlignment="Stretch"
-                                    Margin="0,0,0,10">
+                                    Margin="0,0,0,8">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="+" FontSize="16" FontWeight="Bold"
                                                VerticalAlignment="Center" Margin="0,0,6,0" />
@@ -277,83 +426,26 @@
                                 </StackPanel>
                             </Button>
 
-                            <!-- Apply Rules Toggle -->
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,6" HorizontalAlignment="Center">
-                                <CheckBox Style="{StaticResource ModernCheckBox}"
-                                          IsChecked="{Binding ApplyRules}" />
-                                <TextBlock Text="Apply Rules"
-                                           Foreground="{StaticResource PrimaryTextBrush}"
-                                           FontSize="13" VerticalAlignment="Center"
-                                           Margin="4,0,0,0" />
-                            </StackPanel>
-
-                            <!-- AND / OR Mode -->
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8"
-                                        HorizontalAlignment="Center"
-                                        Visibility="{Binding ApplyRules, Converter={StaticResource BoolToVis}}">
-                                <TextBlock Text="Process Rules as"
+                            <!-- Files no rule matched -->
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Other files:"
                                            Foreground="{StaticResource SecondaryTextBrush}"
                                            FontSize="12" VerticalAlignment="Center"
                                            Margin="0,0,8,0" />
-                                <RadioButton Content="AND"
-                                             IsChecked="{Binding RulesAndMode}"
-                                             Foreground="{StaticResource PrimaryTextBrush}"
-                                             FontSize="12" VerticalAlignment="Center"
-                                             Margin="0,0,10,0" />
-                                <RadioButton Content="OR"
-                                             IsChecked="{Binding RulesOrMode}"
-                                             Foreground="{StaticResource PrimaryTextBrush}"
-                                             FontSize="12" VerticalAlignment="Center" />
-                            </StackPanel>
-
-                            <!-- Rules List -->
-                            <ItemsControl ItemsSource="{Binding Rules}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Border Background="{StaticResource TertiaryBackgroundBrush}"
-                                                CornerRadius="6" Padding="8" Margin="0,0,0,6">
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="Auto" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                </Grid.ColumnDefinitions>
-
-                                                <ComboBox Grid.Column="0"
-                                                          ItemsSource="{Binding AvailableFields}"
-                                                          SelectedItem="{Binding Field}"
-                                                          FontSize="11" Padding="4,3"
-                                                          Margin="0,0,4,0"
-                                                          MinWidth="75" />
-
-                                                <ComboBox Grid.Column="1"
-                                                          ItemsSource="{Binding AvailableOperators}"
-                                                          SelectedItem="{Binding Operator}"
-                                                          FontSize="11" Padding="4,3"
-                                                          Margin="0,0,4,0"
-                                                          MinWidth="75" />
-
-                                                <TextBox Grid.Column="2"
-                                                         Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
-                                                         FontSize="12" Padding="6,4"
-                                                         Background="{StaticResource SecondaryBackgroundBrush}"
-                                                         Foreground="{StaticResource PrimaryTextBrush}"
-                                                         BorderBrush="{StaticResource BorderBrush}"
-                                                         BorderThickness="1"
-                                                         Margin="0,0,4,0" />
-
-                                                <Button Grid.Column="3"
-                                                        Style="{StaticResource IconButton}"
-                                                        Command="{Binding RemoveCommand}"
-                                                        Content="&#xE711;"
-                                                        FontFamily="Segoe MDL2 Assets"
-                                                        FontSize="11" Padding="4" />
-                                            </Grid>
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
+                                <ComboBox Grid.Column="1" FontSize="12" Padding="6,4"
+                                          SelectedValuePath="Tag"
+                                          SelectedValue="{Binding Unmatched}"
+                                          ToolTip="What happens to files that no rule matched">
+                                    <ComboBoxItem Content="Organize normally"
+                                                  Tag="{x:Static models:UnmatchedFilesMode.OrganizeNormally}" />
+                                    <ComboBoxItem Content="Leave in place"
+                                                  Tag="{x:Static models:UnmatchedFilesMode.LeaveInPlace}" />
+                                </ComboBox>
+                            </Grid>
 
                             <!-- Separator -->
                             <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,6,0,8" />
@@ -622,9 +714,6 @@
                     <CheckBox Style="{StaticResource ModernCheckBox}"
                               IsChecked="{Binding ApplyFilters}"
                               Content="filters" FontSize="11" Margin="0,0,12,0" />
-                    <CheckBox Style="{StaticResource ModernCheckBox}"
-                              IsChecked="{Binding ApplyRules}"
-                              Content="rules" FontSize="11" Margin="0,0,12,0" />
                     <CheckBox Style="{StaticResource ModernCheckBox}"
                               IsChecked="{Binding MoveMode}"
                               Content="move" FontSize="11" Margin="0,0,12,0" />

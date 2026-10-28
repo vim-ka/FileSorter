@@ -3,35 +3,45 @@ using FileSorter.Models;
 
 namespace FileSorter.ViewModels;
 
+/// <summary>Editor row for one rule condition; every property writes straight into <see cref="Model"/>.</summary>
 public class FilterRuleViewModel : ObservableObject
 {
-    private RuleField _field = RuleField.Name;
-    private RuleOperator _operator = RuleOperator.Contains;
-    private string _value = string.Empty;
+    public FilterRule Model { get; }
 
     public RuleField Field
     {
-        get => _field;
+        get => Model.Field;
         set
         {
-            if (SetProperty(ref _field, value))
-            {
-                OnPropertyChanged(nameof(AvailableOperators));
-                Operator = AvailableOperators[0];
-            }
+            if (Model.Field == value) return;
+            Model.Field = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(AvailableOperators));
+            Operator = AvailableOperators[0];
         }
     }
 
     public RuleOperator Operator
     {
-        get => _operator;
-        set => SetProperty(ref _operator, value);
+        get => Model.Operator;
+        set
+        {
+            if (Model.Operator == value) return;
+            Model.Operator = value;
+            OnPropertyChanged();
+        }
     }
 
     public string Value
     {
-        get => _value;
-        set => SetProperty(ref _value, value);
+        get => Model.Value;
+        set
+        {
+            value ??= string.Empty;
+            if (Model.Value == value) return;
+            Model.Value = value;
+            OnPropertyChanged();
+        }
     }
 
     public Array AvailableFields => Enum.GetValues(typeof(RuleField));
@@ -46,8 +56,9 @@ public class FilterRuleViewModel : ObservableObject
     public event Action? RemoveRequested;
     public ICommand RemoveCommand { get; }
 
-    public FilterRuleViewModel()
+    public FilterRuleViewModel(FilterRule model)
     {
+        Model = model;
         RemoveCommand = new RelayCommand(_ => RemoveRequested?.Invoke());
     }
 }

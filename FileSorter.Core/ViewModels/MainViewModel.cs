@@ -26,9 +26,6 @@ public class MainViewModel : ObservableObject
     /// Without a selected folder it is a throwaway default that is never saved.</summary>
     private FolderProfile _profile = FolderProfile.CreateDefault("");
     private bool _applyingProfile;
-    private bool _applyRules;
-    private bool _rulesAndMode;
-    private bool _rulesOrMode = true;
     private bool _isOrganizing;
     private int _progress;
     private string _statusText = "Select a folder to start";
@@ -149,19 +146,6 @@ public class MainViewModel : ObservableObject
         set => CopyMode = !value;
     }
 
-    public bool ApplyRules
-    {
-        get => _applyRules;
-        set
-        {
-            if (SetProperty(ref _applyRules, value))
-            {
-                RefreshPreviewDeferred();
-                OnPropertyChanged(nameof(RulesActiveText));
-            }
-        }
-    }
-
     public bool ApplyFilters
     {
         get => _profile.ApplyFilters;
@@ -178,29 +162,14 @@ public class MainViewModel : ObservableObject
         set => SetProfileValue(_profile.SkipDuplicates, value, (p, v) => p.SkipDuplicates = v);
     }
 
-    public bool RulesAndMode
+    /// <summary>What happens to files no routing rule matched.</summary>
+    public UnmatchedFilesMode Unmatched
     {
-        get => _rulesAndMode;
+        get => _profile.Unmatched;
         set
         {
-            if (SetProperty(ref _rulesAndMode, value))
-            {
-                if (value) RulesOrMode = false;
+            if (SetProfileValue(_profile.Unmatched, value, (p, v) => p.Unmatched = v))
                 RefreshPreviewDeferred();
-            }
-        }
-    }
-
-    public bool RulesOrMode
-    {
-        get => _rulesOrMode;
-        set
-        {
-            if (SetProperty(ref _rulesOrMode, value))
-            {
-                if (value) RulesAndMode = false;
-                RefreshPreviewDeferred();
-            }
         }
     }
 
@@ -234,7 +203,7 @@ public class MainViewModel : ObservableObject
         set => SetProperty(ref _totalFiles, value);
     }
 
-    public string RulesActiveText => ApplyRules && Rules.Count > 0 ? "RULES ON" : "";
+    public string RulesActiveText => _profile.Rules.Any(r => r.IsEnabled) ? "RULES ON" : "";
     public string TypeCountText => SelectedMethod switch
     {
         OrganizeMethod.ByType => $"{CategoryStatsItems.Count} Types",
@@ -300,7 +269,8 @@ public class MainViewModel : ObservableObject
     public ObservableCollection<CategoryStats> CategoryStatsItems { get; } = [];
     public ObservableCollection<ViewFileGroup> ViewFileGroups { get; } = [];
     public IReadOnlyList<ViewFileItem> FlatViewItems { get; private set; } = [];
-    public ObservableCollection<FilterRuleViewModel> Rules { get; } = [];
+    /// <summary>Routing rules of the selected folder, in evaluation order; rebuilt on folder switch.</summary>
+    public ObservableCollection<RoutingRuleViewModel> Rules { get; } = [];
     public ObservableCollection<OrganizeOperation> HistoryItems { get; } = [];
 
     public ICommand AddFolderCommand { get; }
@@ -308,6 +278,10 @@ public class MainViewModel : ObservableObject
     public AsyncRelayCommand OrganizeCommand { get; }
     public AsyncRelayCommand UndoCommand { get; }
     public ICommand AddRuleCommand { get; }
+    public ICommand RemoveRuleCommand { get; }
+    public ICommand MoveRuleUpCommand { get; }
+    public ICommand MoveRuleDownCommand { get; }
+    public ICommand BrowseRuleDestinationCommand { get; }
     public ICommand SetMethodCommand { get; }
     public ICommand SelectFolderCommand { get; }
     public ICommand RemoveFolderCommand { get; }
@@ -344,6 +318,23 @@ public class MainViewModel : ObservableObject
             p => UndoOperationAsync(p as OrganizeOperation),
             p => !IsOrganizing && p is OrganizeOperation op && _organizer.CanUndoOperation(op));
         AddRuleCommand = new RelayCommand(_ => AddRule());
+        RemoveRuleCommand = new RelayCommand(p =>
+        {
+            if (p is RoutingRuleViewModel r) RemoveRule(r);
+        });
+        MoveRuleUpCommand = new RelayCommand(p =>
+        {
+            if (p is RoutingRuleViewModel r) MoveRule(r, -1);
+        });
+        MoveRuleDownCommand = new RelayCommand(p =>
+        {
+            if (p is RoutingRuleViewModel r) MoveRule(r, +1);
+        });
+        BrowseRuleDestinationCommand = new RelayCommand(p =>
+        {
+            if (p is RoutingRuleViewModel r && _dialogs.PickFolder("Select Rule Destination") is { } path)
+                r.Destination = path;
+        });
         SetMethodCommand = new RelayCommand(p =>
         {
             if (p is OrganizeMethod m)
@@ -493,19 +484,60 @@ public class MainViewModel : ObservableObject
         }
     }
 
+    /// <summary>New rules start enabled with one empty condition; inert until a destination is set.</summary>
     private void AddRule()
     {
-        var rule = new FilterRuleViewModel();
-        rule.RemoveRequested += () =>
+        var model = new RoutingRule
         {
-            Rules.Remove(rule);
-            RefreshPreviewDeferred();
+            Conditions = [new FilterRule { Field = RuleField.Extension, Operator = RuleOperator.Is }]
         };
-        rule.PropertyChanged += (_, _) =>
-        {
-            if (ApplyRules) RefreshPreviewDeferred();
-        };
-        Rules.Add(rule);
+        _profile.Rules.Add(model);
+        Rules.Add(CreateRuleViewModel(model));
+        OnRulesChanged();
+    }
+
+    private void RemoveRule(RoutingRuleViewModel rule)
+    {
+        if (!Rules.Remove(rule)) return;
+        rule.Changed -= OnRulesChanged;
+        _profile.Rules.Remove(rule.Model);
+        OnRulesChanged();
+    }
+
+    /// <summary>Moves a rule one step up (-1) or down (+1); rules are evaluated top to bottom.</summary>
+    private void MoveRule(RoutingRuleViewModel rule, int delta)
+    {
+        var index = Rules.IndexOf(rule);
+        var newIndex = index + delta;
+        if (index < 0 || newIndex < 0 || newIndex >= Rules.Count) return;
+
+        Rules.Move(index, newIndex);
+        _profile.Rules.RemoveAt(index);
+        _profile.Rules.Insert(newIndex, rule.Model);
+        OnRulesChanged();
+    }
+
+    private RoutingRuleViewModel CreateRuleViewModel(RoutingRule model)
+    {
+        var vm = new RoutingRuleViewModel(model);
+        vm.Changed += OnRulesChanged;
+        return vm;
+    }
+
+    /// <summary>Shows the rules of the current profile; no preview refresh (the caller rescans).</summary>
+    private void RebuildRules()
+    {
+        foreach (var rule in Rules)
+            rule.Changed -= OnRulesChanged;
+        Rules.Clear();
+        foreach (var model in _profile.Rules)
+            Rules.Add(CreateRuleViewModel(model));
+    }
+
+    private void OnRulesChanged()
+    {
+        OnPropertyChanged(nameof(RulesActiveText));
+        RefreshPreviewDeferred();
     }
 
     private void AddFolder()
@@ -535,7 +567,7 @@ public class MainViewModel : ObservableObject
         nameof(SelectedMethod), nameof(ShowDatePanel), nameof(DestinationSubfolderPattern),
         nameof(SelectedDateGranularity), nameof(ApplyFilters), nameof(DestinationFolder),
         nameof(DestinationDisplay), nameof(CopyMode), nameof(MoveMode), nameof(IncludeSubfolders),
-        nameof(SkipDuplicates)
+        nameof(SkipDuplicates), nameof(Unmatched), nameof(RulesActiveText)
     ];
 
     /// <summary>Shows the folder's profile in the UI and rescans; null clears the selection.</summary>
@@ -558,6 +590,7 @@ public class MainViewModel : ObservableObject
         {
             _applyingProfile = false;
         }
+        RebuildRules();
 
         foreach (var name in ProfileProperties)
             OnPropertyChanged(name);
