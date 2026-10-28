@@ -126,7 +126,27 @@ public class PlannerTests : TempDataDirTest
     [Fact]
     public void Snapshot_DriveRelativeDestination_IsInvalid()
     {
-        Assert.Null(Rule("D:Movies", RuleField.Name, RuleOperator.Contains, "").Snapshot());
+        Assert.Null(Rule("D:Movies", RuleField.Name, RuleOperator.Contains, "x").Snapshot());
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Snapshot_BlankConditionValue_RuleIsInert(string value)
+    {
+        var rule = Rule("Movies", RuleField.Extension, RuleOperator.Is, "mp4");
+        rule.Conditions.Add(new FilterRule { Field = RuleField.Name, Operator = RuleOperator.Contains, Value = value });
+
+        Assert.Null(rule.Snapshot());
+        Assert.Null(Rule("Movies", RuleField.Extension, RuleOperator.Is, value).Snapshot());
+    }
+
+    [Fact]
+    public void Snapshot_NoConditions_MatchesEveryFile()
+    {
+        var rule = new RoutingRule { Destination = "Movies" };
+
+        Assert.True(rule.Snapshot()!.Matches(File("a.txt")));
     }
 
     [Fact]

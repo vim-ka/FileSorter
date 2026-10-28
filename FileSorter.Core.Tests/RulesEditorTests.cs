@@ -7,10 +7,10 @@ public class RulesEditorTests : TempDataDirTest
 {
     private readonly FakeDialogs _dialogs = new();
 
-    private MainViewModel NewVm() =>
+    internal MainViewModel NewVm() =>
         new(new InlineDispatcher(), _dialogs, new NullThumbnails(), new NullTheme());
 
-    private FolderViewModel AddFolder(MainViewModel vm, string path)
+    internal FolderViewModel AddFolder(MainViewModel vm, string path)
     {
         _dialogs.Folders.Enqueue(path);
         vm.AddFolderCommand.Execute(null);
@@ -29,11 +29,32 @@ public class RulesEditorTests : TempDataDirTest
     private static List<string> PreviewFolders(MainViewModel vm) =>
         vm.PreviewItems.Count == 0 ? [] : vm.PreviewItems[0].Children.Select(c => c.Name).ToList();
 
+    /// <summary>
+    /// Switches to grouping by extension and waits for that preview: refreshes run in order and
+    /// the last one reads the current profile, so the result reflects every edit made before.
+    /// </summary>
+    private static async Task<List<string>> SettledPreviewByExtension(MainViewModel vm)
+    {
+        vm.SelectedMethod = OrganizeMethod.ByExtension;
+        await Wait.UntilAsync(() => !vm.IsScanning && PreviewFolders(vm).Contains("TXT"));
+        return PreviewFolders(vm);
+    }
+
+    private static async Task<MainViewModel> ScannedVm(RulesEditorTests t, string dir)
+    {
+        var vm = t.NewVm();
+        t.AddFolder(vm, dir);
+        await Wait.UntilAsync(() => vm.StatusText.Contains("will be organized"));
+        return vm;
+    }
+
     [Fact]
     public void AddRule_AppearsInProfile()
     {
         var vm = NewVm();
         var a = AddFolder(vm, TestData.NewTempDir("A"));
+        var raised = 0;
+        vm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(vm.RulesActiveText)) raised++; };
         Assert.Equal("", vm.RulesActiveText);
 
         vm.AddRuleCommand.Execute(null);
@@ -41,16 +62,59 @@ public class RulesEditorTests : TempDataDirTest
         var rule = Assert.Single(vm.Rules);
         Assert.Same(a.Profile.Rules.Single(), rule.Model);
         Assert.True(rule.IsEnabled);
-        Assert.Equal("RULES ON", vm.RulesActiveText);
+        Assert.Equal("", vm.RulesActiveText); // no destination, blank condition: not effective yet
 
         rule.Destination = "Movies";
         rule.MatchAll = false;
         Assert.Equal("Movies", a.Profile.Rules[0].Destination);
         Assert.False(a.Profile.Rules[0].MatchAll);
+        Assert.Equal("", vm.RulesActiveText); // the seeded condition is still blank
 
+        raised = 0;
+        rule.Conditions[0].Value = "mp4";
+        Assert.Equal("RULES ON", vm.RulesActiveText);
+        Assert.True(raised > 0);
+
+        raised = 0;
         rule.IsEnabled = false;
         Assert.False(a.Profile.Rules[0].IsEnabled);
         Assert.Equal("", vm.RulesActiveText);
+        Assert.True(raised > 0);
+    }
+
+    [Fact]
+    public async Task NewRule_BlankSeededCondition_LeavesPreviewUnchangedUntilFilled()
+    {
+        var dir = TestData.NewTempDir("Src");
+        TestData.WriteFile(dir, "clip.mp4");
+        TestData.WriteFile(dir, "notes.txt");
+        var vm = await ScannedVm(this, dir);
+
+        vm.AddRuleCommand.Execute(null);
+        var rule = vm.Rules.Single();
+        rule.Destination = "Movies";
+
+        Assert.Equal(["MP4", "TXT"], (await SettledPreviewByExtension(vm)).Order());
+
+        rule.Conditions.Single().Value = "mp4";
+
+        await Wait.UntilAsync(() => PreviewFolders(vm).Contains("Movies"));
+        Assert.Equal(["Movies", "TXT"], PreviewFolders(vm).Order());
+    }
+
+    [Fact]
+    public async Task RuleWithEmptyDestination_LeavesPreviewUnchanged()
+    {
+        var dir = TestData.NewTempDir("Src");
+        TestData.WriteFile(dir, "clip.mp4");
+        TestData.WriteFile(dir, "notes.txt");
+        var vm = await ScannedVm(this, dir);
+
+        vm.AddRuleCommand.Execute(null);
+        vm.Rules.Single().Conditions.Single().Value = "mp4";
+
+        Assert.Equal("", vm.RulesActiveText);
+        Assert.Equal(["MP4", "TXT"], (await SettledPreviewByExtension(vm)).Order());
     }
 
     [Fact]
@@ -178,6 +242,7 @@ public class RulesEditorTests : TempDataDirTest
         var vm = NewVm();
         var a = AddFolder(vm, TestData.NewTempDir("A"));
         var ruleA = AddRule(vm, "Movies");
+        ruleA.Conditions[0].Value = "mp4";
         var b = AddFolder(vm, TestData.NewTempDir("B"));
 
         Assert.Empty(vm.Rules);
@@ -191,7 +256,14 @@ public class RulesEditorTests : TempDataDirTest
         Assert.Same(a.Profile.Rules[0], rebuilt.Model);
         Assert.Equal("RULES ON", vm.RulesActiveText);
 
-        ruleA.Destination = "Stale"; // a view model of the previous rebuild must not matter
+        // a view model of the previous rebuild must not notify or refresh the main view model
+        var raised = new List<string?>();
+        vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+        ruleA.Destination = "Stale";
+        ruleA.Conditions[0].Value = "mkv";
+        ruleA.IsEnabled = false;
+        Assert.Empty(raised);
+
         rebuilt.Destination = "Films";
         Assert.Equal(["Docs", "Music"], b.Profile.Rules.Select(r => r.Destination));
 

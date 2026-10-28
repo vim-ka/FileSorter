@@ -203,7 +203,8 @@ public class MainViewModel : ObservableObject
         set => SetProperty(ref _totalFiles, value);
     }
 
-    public string RulesActiveText => _profile.Rules.Any(r => r.IsEnabled) ? "RULES ON" : "";
+    /// <summary>"RULES ON" while at least one rule is effective (enabled, complete, with a destination).</summary>
+    public string RulesActiveText => _profile.Rules.Any(r => r.Snapshot() != null) ? "RULES ON" : "";
     public string TypeCountText => SelectedMethod switch
     {
         OrganizeMethod.ByType => $"{CategoryStatsItems.Count} Types",
@@ -484,7 +485,10 @@ public class MainViewModel : ObservableObject
         }
     }
 
-    /// <summary>New rules start enabled with one empty condition; inert until a destination is set.</summary>
+    /// <summary>
+    /// New rules start enabled with one blank "Extension / Is" condition; the rule stays inert
+    /// until it has a destination and the condition has a value.
+    /// </summary>
     private void AddRule()
     {
         var model = new RoutingRule
