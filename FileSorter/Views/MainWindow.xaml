@@ -139,72 +139,34 @@
                                 </StackPanel>
                             </Button>
 
-                            <!-- Current Folder -->
-                            <TextBlock Text="Current"
+                            <!-- Folders (each has its own profile; removed only manually) -->
+                            <TextBlock Text="Folders"
                                        Foreground="{StaticResource SecondaryTextBrush}"
                                        FontSize="12" FontWeight="SemiBold"
                                        Margin="0,0,0,6" />
 
-                            <Border Background="{StaticResource TertiaryBackgroundBrush}"
-                                    CornerRadius="6" Padding="10,8" Margin="0,0,0,12"
-                                    Visibility="{Binding HasSourceFolder, Converter={StaticResource BoolToVis}}"
-                                    ToolTip="{Binding SourceFolder}">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-
-                                    <TextBlock Grid.Column="0"
-                                               Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets"
-                                               FontSize="16" Foreground="{StaticResource AccentBrush}"
-                                               VerticalAlignment="Center" Margin="0,0,8,0" />
-                                    <TextBlock Grid.Column="1"
-                                               Text="{Binding CurrentFolderName}"
-                                               FontSize="13" FontWeight="SemiBold"
-                                               Foreground="{StaticResource PrimaryTextBrush}"
-                                               VerticalAlignment="Center"
-                                               TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Grid.Column="2"
-                                               Text="{Binding CurrentFolderFileCount}"
-                                               FontSize="12"
-                                               Foreground="{StaticResource SecondaryTextBrush}"
-                                               VerticalAlignment="Center"
-                                               Margin="8,0,0,0" />
-                                </Grid>
-                            </Border>
-
-                            <TextBlock Text="No folder selected"
-                                       Foreground="{StaticResource SecondaryTextBrush}"
-                                       FontSize="12" FontStyle="Italic"
-                                       Margin="4,0,0,12"
-                                       Visibility="{Binding HasSourceFolder, Converter={StaticResource InvBoolToVis}}" />
-
-                            <!-- Recent Folders -->
-                            <TextBlock Text="Recent"
-                                       Foreground="{StaticResource SecondaryTextBrush}"
-                                       FontSize="12" FontWeight="SemiBold"
-                                       Margin="0,0,0,6" />
-
-                            <ItemsControl ItemsSource="{Binding RecentFolders}">
+                            <ItemsControl ItemsSource="{Binding Folders}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Background="Transparent"
+                                        <Border x:Name="row"
                                                 CornerRadius="6" Padding="10,6" Margin="0,0,0,2"
                                                 Cursor="Hand"
                                                 ToolTip="{Binding FullPath}">
                                             <Border.InputBindings>
                                                 <MouseBinding MouseAction="LeftClick"
-                                                              Command="{Binding DataContext.SelectRecentFolderCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                              Command="{Binding DataContext.SelectFolderCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                               CommandParameter="{Binding}" />
                                             </Border.InputBindings>
                                             <Border.Style>
                                                 <Style TargetType="Border">
+                                                    <Setter Property="Background" Value="Transparent" />
                                                     <Style.Triggers>
                                                         <Trigger Property="IsMouseOver" Value="True">
                                                             <Setter Property="Background" Value="{StaticResource TertiaryBackgroundBrush}" />
                                                         </Trigger>
+                                                        <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                            <Setter Property="Background" Value="{StaticResource TertiaryBackgroundBrush}" />
+                                                        </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
                                             </Border.Style>
@@ -213,31 +175,73 @@
                                                     <ColumnDefinition Width="Auto" />
                                                     <ColumnDefinition Width="*" />
                                                     <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
                                                 </Grid.ColumnDefinitions>
 
                                                 <TextBlock Grid.Column="0"
                                                            Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets"
-                                                           FontSize="14" Foreground="{StaticResource SecondaryTextBrush}"
-                                                           VerticalAlignment="Center" Margin="0,0,8,0" />
+                                                           FontSize="14"
+                                                           VerticalAlignment="Center" Margin="0,0,8,0">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Foreground" Value="{StaticResource SecondaryTextBrush}" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                                    <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
                                                 <TextBlock Grid.Column="1"
                                                            Text="{Binding Name}"
                                                            FontSize="13"
                                                            Foreground="{StaticResource PrimaryTextBrush}"
                                                            VerticalAlignment="Center"
-                                                           TextTrimming="CharacterEllipsis" />
+                                                           TextTrimming="CharacterEllipsis">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="FontWeight" Value="Normal" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                                    <Setter Property="FontWeight" Value="SemiBold" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
                                                 <TextBlock Grid.Column="2"
                                                            Text="{Binding FileCount}"
                                                            FontSize="11"
                                                            Foreground="{StaticResource SecondaryTextBrush}"
                                                            VerticalAlignment="Center"
                                                            Margin="8,0,0,0" />
+                                                <Button Grid.Column="3"
+                                                        Command="{Binding DataContext.RemoveFolderCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}"
+                                                        Content="&#xE711;"
+                                                        FontFamily="Segoe MDL2 Assets"
+                                                        FontSize="10" Padding="4"
+                                                        Margin="4,0,0,0"
+                                                        ToolTip="Remove from list">
+                                                    <Button.Style>
+                                                        <Style TargetType="Button" BasedOn="{StaticResource IconButton}">
+                                                            <Setter Property="Visibility" Value="Hidden" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsMouseOver, ElementName=row}" Value="True">
+                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Button.Style>
+                                                </Button>
                                             </Grid>
                                         </Border>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
 
-                            <TextBlock Text="No recent folders"
+                            <TextBlock Text="No folders yet"
                                        Foreground="{StaticResource BorderBrush}"
                                        FontSize="11" FontStyle="Italic"
                                        Margin="4,4,0,0">
@@ -245,7 +249,7 @@
                                     <Style TargetType="TextBlock">
                                         <Setter Property="Visibility" Value="Collapsed" />
                                         <Style.Triggers>
-                                            <DataTrigger Binding="{Binding RecentFolders.Count}" Value="0">
+                                            <DataTrigger Binding="{Binding Folders.Count}" Value="0">
                                                 <Setter Property="Visibility" Value="Visible" />
                                             </DataTrigger>
                                         </Style.Triggers>

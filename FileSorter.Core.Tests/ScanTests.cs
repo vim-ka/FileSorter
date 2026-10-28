@@ -5,7 +5,7 @@ using FileSorter.ViewModels;
 
 namespace FileSorter.Core.Tests;
 
-public class ScanTests
+public class ScanTests : TempDataDirTest
 {
     /// <summary>Queues UI actions instead of running them, so a test controls when a batch lands.</summary>
     private sealed class QueuedDispatcher : IUiDispatcher
@@ -28,43 +28,16 @@ public class ScanTests
         }
     }
 
-    /// <summary>Runs UI actions immediately (no UI thread in tests).</summary>
-    private sealed class InlineDispatcher : IUiDispatcher
-    {
-        public Task InvokeAsync(Action action) { action(); return Task.CompletedTask; }
-    }
+    private static Task WaitUntilAsync(Func<bool> condition, int timeoutMs = 5000) =>
+        Wait.UntilAsync(condition, timeoutMs);
 
-    private sealed class NoDialogs : IDialogService
-    {
-        public string? PickFolder(string title) => null;
-        public void ShowError(string title, string message) { }
-    }
+    private static MainViewModel NewVm(IUiDispatcher dispatcher, FakeDialogs dialogs) =>
+        new(dispatcher, dialogs, new NullThumbnails(), new NullTheme());
 
-    private sealed class NoThumbnails : IThumbnailProvider
+    private static void AddFolder(MainViewModel vm, FakeDialogs dialogs, string path)
     {
-        public object? GetOrRequest(string path, DateTime dateModified, int size, Action<object> onLoaded) => null;
-        public void CancelPending() { }
-    }
-
-    private sealed class NoTheme : IThemeService
-    {
-        public void ApplyTheme(bool isDark) { }
-    }
-
-    private static async Task WaitUntilAsync(Func<bool> condition, int timeoutMs = 5000)
-    {
-        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-        while (!condition())
-        {
-            Assert.True(DateTime.UtcNow < deadline, "timed out waiting for condition");
-            await Task.Delay(10);
-        }
-    }
-
-    public ScanTests()
-    {
-        TestData.RedirectAppData();
-        JsonFileStore.DataDir = TestData.NewTempDir("scan");
+        dialogs.Folders.Enqueue(path);
+        vm.AddFolderCommand.Execute(null);
     }
 
     [Fact]
@@ -76,12 +49,13 @@ public class ScanTests
         for (int i = 0; i < 3; i++) TestData.WriteFile(dirB, $"b{i}.txt");
 
         var dispatcher = new QueuedDispatcher();
-        var vm = new MainViewModel(dispatcher, new NoDialogs(), new NoThumbnails(), new NoTheme());
+        var dialogs = new FakeDialogs();
+        var vm = NewVm(dispatcher, dialogs);
 
-        vm.SourceFolder = dirA;
+        AddFolder(vm, dialogs, dirA);
         await WaitUntilAsync(() => !dispatcher.Queue.IsEmpty); // A's first batch is posted, not yet applied
 
-        vm.SourceFolder = dirB; // cancels A, resets the list, starts B
+        AddFolder(vm, dialogs, dirB); // cancels A, resets the list, starts B
 
         await dispatcher.RunOneAsync(); // the stale batch from A lands now
         await dispatcher.RunOneAsync(); // B's batch
@@ -97,8 +71,9 @@ public class ScanTests
         TestData.WriteFile(dir, "a.txt");
         TestData.WriteFile(dir, "b.txt");
 
-        var vm = new MainViewModel(new InlineDispatcher(), new NoDialogs(), new NoThumbnails(), new NoTheme());
-        vm.SourceFolder = dir;
+        var dialogs = new FakeDialogs();
+        var vm = NewVm(new InlineDispatcher(), dialogs);
+        AddFolder(vm, dialogs, dir);
         await WaitUntilAsync(() => vm.StatusText.Contains("will be organized"));
 
         vm.OrganizeCommand.Execute(null);

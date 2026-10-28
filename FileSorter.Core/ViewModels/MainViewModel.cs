@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using FileSorter.Abstractions;
 using FileSorter.Models;
@@ -19,28 +20,22 @@ public class MainViewModel : ObservableObject
     private CancellationTokenSource? _scanCts;
     private bool _isScanning;
 
-    private string _sourceFolder = string.Empty;
-    private string? _destinationFolder;
-    private string _currentFolderName = string.Empty;
-    private int _currentFolderFileCount;
-    private OrganizeMethod _selectedMethod = OrganizeMethod.ByType;
-    private bool _includeSubfolders = true;
-    private bool _copyMode;
-    private bool _moveMode = true;
+    private AppSettings _settings = new();
+    private FolderViewModel? _selectedFolder;
+    /// <summary>Profile of the selected folder — the single store of per-folder options.
+    /// Without a selected folder it is a throwaway default that is never saved.</summary>
+    private FolderProfile _profile = FolderProfile.CreateDefault("");
+    private bool _applyingProfile;
     private bool _applyRules;
-    private bool _applyFilters = true;
     private bool _rulesAndMode;
     private bool _rulesOrMode = true;
     private bool _isOrganizing;
     private int _progress;
     private string _statusText = "Select a folder to start";
     private int _totalFiles;
-    private string _destinationSubfolderPattern = "";
     private bool _isDarkTheme = true;
     private bool _showHistory;
-    private DateGranularity _selectedDateGranularity = DateGranularity.Month;
     private FileViewMode _selectedViewMode = FileViewMode.Tree;
-    private bool _skipDuplicates;
     private bool _throttlePending;
 
     // Colors for categories
@@ -58,66 +53,69 @@ public class MainViewModel : ObservableObject
         new RgbColor(130, 130, 150),  // Other - dim
     ];
 
-    public string SourceFolder
+    /// <summary>The managed folder list; nothing is evicted automatically.</summary>
+    public ObservableCollection<FolderViewModel> Folders { get; } = [];
+
+    public FolderViewModel? SelectedFolder
     {
-        get => _sourceFolder;
-        set
-        {
-            if (SetProperty(ref _sourceFolder, value))
-            {
-                var name = string.IsNullOrEmpty(value) ? "" : Path.GetFileName(value);
-                CurrentFolderName = string.IsNullOrEmpty(name) ? value : name;
-                _ = RefreshFilesAsync();
-                OnPropertyChanged(nameof(HasSourceFolder));
-            }
-        }
+        get => _selectedFolder;
+        set => SelectFolder(value);
     }
 
-    public bool HasSourceFolder => !string.IsNullOrEmpty(_sourceFolder);
+    public string SourceFolder => _selectedFolder?.FullPath ?? "";
 
-    public string CurrentFolderName
-    {
-        get => _currentFolderName;
-        set => SetProperty(ref _currentFolderName, value);
-    }
+    public bool HasSourceFolder => _selectedFolder != null;
 
     public int CurrentFolderFileCount
     {
-        get => _currentFolderFileCount;
-        set => SetProperty(ref _currentFolderFileCount, value);
+        get => _selectedFolder?.FileCount ?? 0;
+        private set
+        {
+            if (_selectedFolder == null || _selectedFolder.FileCount == value) return;
+            _selectedFolder.FileCount = value;
+            OnPropertyChanged();
+        }
     }
 
-    public ObservableCollection<RecentFolder> RecentFolders { get; } = [];
+    /// <summary>Writes a per-folder option into the selected profile; true if it changed.</summary>
+    private bool SetProfileValue<T>(T current, T value, Action<FolderProfile, T> assign,
+        [CallerMemberName] string? propertyName = null)
+    {
+        if (EqualityComparer<T>.Default.Equals(current, value)) return false;
+        assign(_profile, value);
+        OnPropertyChanged(propertyName);
+        return true;
+    }
 
     public string? DestinationFolder
     {
-        get => _destinationFolder;
+        get => _profile.DestinationFolder;
         set
         {
-            if (SetProperty(ref _destinationFolder, value))
+            if (SetProfileValue(_profile.DestinationFolder, value, (p, v) => p.DestinationFolder = v))
                 OnPropertyChanged(nameof(DestinationDisplay));
         }
     }
 
     public string DestinationDisplay =>
-        string.IsNullOrEmpty(_destinationFolder) ? "Folder" : Path.GetFileName(_destinationFolder) ?? "Folder";
+        string.IsNullOrEmpty(DestinationFolder) ? "Folder" : Path.GetFileName(DestinationFolder) ?? "Folder";
 
     public string DestinationSubfolderPattern
     {
-        get => _destinationSubfolderPattern;
+        get => _profile.Template;
         set
         {
-            if (SetProperty(ref _destinationSubfolderPattern, value))
+            if (SetProfileValue(_profile.Template, value ?? "", (p, v) => p.Template = v))
                 RefreshPreviewDeferred();
         }
     }
 
     public OrganizeMethod SelectedMethod
     {
-        get => _selectedMethod;
+        get => _profile.Method;
         set
         {
-            if (SetProperty(ref _selectedMethod, value))
+            if (SetProfileValue(_profile.Method, value, (p, v) => p.Method = v))
             {
                 OnPropertyChanged(nameof(ShowDatePanel));
                 RefreshPreviewDeferred();
@@ -127,32 +125,28 @@ public class MainViewModel : ObservableObject
 
     public bool IncludeSubfolders
     {
-        get => _includeSubfolders;
+        get => _profile.IncludeSubfolders;
         set
         {
-            if (SetProperty(ref _includeSubfolders, value))
+            if (SetProfileValue(_profile.IncludeSubfolders, value, (p, v) => p.IncludeSubfolders = v))
                 _ = RefreshFilesAsync();
         }
     }
 
     public bool CopyMode
     {
-        get => _copyMode;
+        get => _profile.CopyMode;
         set
         {
-            if (SetProperty(ref _copyMode, value) && value)
-                MoveMode = false;
+            if (SetProfileValue(_profile.CopyMode, value, (p, v) => p.CopyMode = v))
+                OnPropertyChanged(nameof(MoveMode));
         }
     }
 
     public bool MoveMode
     {
-        get => _moveMode;
-        set
-        {
-            if (SetProperty(ref _moveMode, value) && value)
-                CopyMode = false;
-        }
+        get => !CopyMode;
+        set => CopyMode = !value;
     }
 
     public bool ApplyRules
@@ -170,18 +164,18 @@ public class MainViewModel : ObservableObject
 
     public bool ApplyFilters
     {
-        get => _applyFilters;
+        get => _profile.ApplyFilters;
         set
         {
-            if (SetProperty(ref _applyFilters, value))
+            if (SetProfileValue(_profile.ApplyFilters, value, (p, v) => p.ApplyFilters = v))
                 RefreshPreviewDeferred();
         }
     }
 
     public bool SkipDuplicates
     {
-        get => _skipDuplicates;
-        set => SetProperty(ref _skipDuplicates, value);
+        get => _profile.SkipDuplicates;
+        set => SetProfileValue(_profile.SkipDuplicates, value, (p, v) => p.SkipDuplicates = v);
     }
 
     public bool RulesAndMode
@@ -269,10 +263,10 @@ public class MainViewModel : ObservableObject
 
     public DateGranularity SelectedDateGranularity
     {
-        get => _selectedDateGranularity;
+        get => _profile.DateGranularity;
         set
         {
-            if (SetProperty(ref _selectedDateGranularity, value))
+            if (SetProfileValue(_profile.DateGranularity, value, (p, v) => p.DateGranularity = v))
                 RefreshPreviewDeferred();
         }
     }
@@ -315,8 +309,8 @@ public class MainViewModel : ObservableObject
     public AsyncRelayCommand UndoCommand { get; }
     public ICommand AddRuleCommand { get; }
     public ICommand SetMethodCommand { get; }
-    public ICommand SelectRecentFolderCommand { get; }
-    public ICommand RemoveRecentFolderCommand { get; }
+    public ICommand SelectFolderCommand { get; }
+    public ICommand RemoveFolderCommand { get; }
     public ICommand ToggleCategoryCommand { get; }
     public ICommand SetDateGranularityCommand { get; }
     public ICommand CloseDatePanelCommand { get; }
@@ -342,7 +336,7 @@ public class MainViewModel : ObservableObject
         _thumbnails = thumbnails;
         _theme = theme;
 
-        AddFolderCommand = new RelayCommand(_ => SelectSourceFolder());
+        AddFolderCommand = new RelayCommand(_ => AddFolder());
         SelectDestinationCommand = new RelayCommand(_ => SelectDestinationFolder());
         OrganizeCommand = new AsyncRelayCommand(_ => OrganizeAsync(), _ => CanOrganize());
         UndoCommand = new AsyncRelayCommand(_ => UndoLastAsync(), _ => !IsOrganizing && CanUndo);
@@ -355,19 +349,15 @@ public class MainViewModel : ObservableObject
             if (p is OrganizeMethod m)
                 SelectedMethod = m;
         });
-        SelectRecentFolderCommand = new RelayCommand(p =>
+        SelectFolderCommand = new RelayCommand(p =>
         {
-            if (p is RecentFolder rf)
-            {
-                AddCurrentToRecent();
-                RecentFolders.Remove(rf);
-                SourceFolder = rf.FullPath;
-            }
+            if (p is FolderViewModel f)
+                SelectFolder(f);
         });
-        RemoveRecentFolderCommand = new RelayCommand(p =>
+        RemoveFolderCommand = new RelayCommand(p =>
         {
-            if (p is RecentFolder rf)
-                RecentFolders.Remove(rf);
+            if (p is FolderViewModel f)
+                RemoveFolder(f);
         });
         SetDateGranularityCommand = new RelayCommand(p =>
         {
@@ -460,79 +450,29 @@ public class MainViewModel : ObservableObject
         _theme.ApplyTheme(IsDarkTheme);
     }
 
-    // INTERIM (Task 2): the VM still holds one global set of options. They are mapped to/from the
-    // profile of the current folder; other recent folders keep their stored profiles. Task 3 replaces this.
     public void SaveSettings()
     {
-        var existing = SettingsService.Load();
-        var settings = new AppSettings
-        {
-            IsDarkTheme = IsDarkTheme,
-            SelectedViewMode = SelectedViewMode,
-            StartWithWindows = existing.StartWithWindows,
-            PauseAll = existing.PauseAll,
-            TrayHintShown = existing.TrayHintShown
-        };
-
-        // Current folder first (so it appears in Recent on next launch), then the other recents.
-        if (!string.IsNullOrEmpty(SourceFolder))
-        {
-            var profile = existing.FindProfile(SourceFolder) ?? FolderProfile.CreateDefault(SourceFolder);
-            profile.Name = CurrentFolderName;
-            profile.FileCount = CurrentFolderFileCount;
-            profile.DestinationFolder = DestinationFolder;
-            profile.IncludeSubfolders = IncludeSubfolders;
-            profile.CopyMode = CopyMode;
-            profile.ApplyFilters = ApplyFilters;
-            profile.SkipDuplicates = SkipDuplicates;
-            profile.Method = SelectedMethod;
-            profile.Template = DestinationSubfolderPattern ?? "";
-            profile.DateGranularity = SelectedDateGranularity;
-            settings.Folders.Add(profile);
-        }
-
-        foreach (var rf in RecentFolders)
-        {
-            if (settings.FindProfile(rf.FullPath) != null) continue;
-            var profile = existing.FindProfile(rf.FullPath) ?? FolderProfile.CreateDefault(rf.FullPath);
-            profile.Name = rf.Name;
-            profile.FileCount = rf.FileCount;
-            settings.Folders.Add(profile);
-        }
-
-        // Keep max 10
-        if (settings.Folders.Count > 10)
-            settings.Folders = settings.Folders.Take(10).ToList();
-
-        SettingsService.Save(settings);
+        _settings.IsDarkTheme = IsDarkTheme;
+        _settings.SelectedViewMode = SelectedViewMode;
+        _settings.Folders = Folders.Select(f => f.Profile).ToList();
+        SettingsService.Save(_settings);
     }
 
     private void LoadSettings()
     {
-        var settings = SettingsService.Load();
-        var current = settings.Folders.FirstOrDefault() ?? FolderProfile.CreateDefault("");
+        _settings = SettingsService.Load();
+        _isDarkTheme = _settings.IsDarkTheme;
+        _selectedViewMode = _settings.SelectedViewMode;
 
-        DestinationFolder = current.DestinationFolder;
-        _isDarkTheme = settings.IsDarkTheme;
-        _includeSubfolders = current.IncludeSubfolders;
-        _copyMode = current.CopyMode;
-        _moveMode = !current.CopyMode;
-        _applyFilters = current.ApplyFilters;
-        _skipDuplicates = current.SkipDuplicates;
-        _selectedMethod = current.Method;
-        _selectedViewMode = settings.SelectedViewMode;
-        _destinationSubfolderPattern = current.Template;
-        _selectedDateGranularity = current.DateGranularity;
+        foreach (var profile in _settings.Folders)
+            Folders.Add(CreateFolderViewModel(profile));
+    }
 
-        foreach (var profile in settings.Folders)
-        {
-            RecentFolders.Add(new RecentFolder
-            {
-                FullPath = profile.FullPath,
-                Name = profile.Name,
-                FileCount = profile.FileCount
-            });
-        }
+    private FolderViewModel CreateFolderViewModel(FolderProfile profile)
+    {
+        var folder = new FolderViewModel(profile);
+        folder.RefreshStatus(_settings.PauseAll);
+        return folder;
     }
 
     private void LoadCategories()
@@ -541,7 +481,14 @@ public class MainViewModel : ObservableObject
         for (int i = 0; i < defaultCategories.Count; i++)
         {
             var vm = new CategoryViewModel(defaultCategories[i]);
-            vm.PropertyChanged += (_, _) => RefreshPreviewDeferred();
+            vm.PropertyChanged += (_, e) =>
+            {
+                if (_applyingProfile || e.PropertyName != nameof(CategoryViewModel.IsSelected)) return;
+                _profile.DisabledCategories.RemoveAll(n => n == vm.Name);
+                if (!vm.IsSelected)
+                    _profile.DisabledCategories.Add(vm.Name);
+                RefreshPreviewDeferred();
+            };
             Categories.Add(vm);
         }
     }
@@ -561,35 +508,61 @@ public class MainViewModel : ObservableObject
         Rules.Add(rule);
     }
 
-    private void SelectSourceFolder()
+    private void AddFolder()
     {
-        var folder = _dialogs.PickFolder("Select Source Folder");
-        if (folder != null)
+        var path = _dialogs.PickFolder("Select Source Folder");
+        if (path == null) return;
+
+        var folder = Folders.FirstOrDefault(f => PathKey.Equal(f.FullPath, path));
+        if (folder == null)
         {
-            AddCurrentToRecent();
-            SourceFolder = folder;
+            folder = CreateFolderViewModel(FolderProfile.CreateDefault(path));
+            Folders.Insert(0, folder);
         }
+        SelectFolder(folder);
     }
 
-    private void AddCurrentToRecent()
+    private void RemoveFolder(FolderViewModel folder)
     {
-        if (string.IsNullOrEmpty(SourceFolder)) return;
+        if (ReferenceEquals(folder, _selectedFolder))
+            SelectFolder(Folders.FirstOrDefault(f => !ReferenceEquals(f, folder)));
+        Folders.Remove(folder);
+    }
 
-        // Don't add duplicates
-        var existing = RecentFolders.FirstOrDefault(r => r.FullPath == SourceFolder);
-        if (existing != null)
-            RecentFolders.Remove(existing);
+    private static readonly string[] ProfileProperties =
+    [
+        nameof(SelectedFolder), nameof(SourceFolder), nameof(HasSourceFolder), nameof(CurrentFolderFileCount),
+        nameof(SelectedMethod), nameof(ShowDatePanel), nameof(DestinationSubfolderPattern),
+        nameof(SelectedDateGranularity), nameof(ApplyFilters), nameof(DestinationFolder),
+        nameof(DestinationDisplay), nameof(CopyMode), nameof(MoveMode), nameof(IncludeSubfolders),
+        nameof(SkipDuplicates)
+    ];
 
-        RecentFolders.Insert(0, new RecentFolder
+    /// <summary>Shows the folder's profile in the UI and rescans; null clears the selection.</summary>
+    private void SelectFolder(FolderViewModel? folder)
+    {
+        if (ReferenceEquals(folder, _selectedFolder)) return;
+
+        if (_selectedFolder != null) _selectedFolder.IsSelected = false;
+        _selectedFolder = folder;
+        if (folder != null) folder.IsSelected = true;
+        _profile = folder?.Profile ?? FolderProfile.CreateDefault("");
+
+        _applyingProfile = true;
+        try
         {
-            FullPath = SourceFolder,
-            Name = CurrentFolderName,
-            FileCount = CurrentFolderFileCount
-        });
+            foreach (var cat in Categories)
+                cat.IsSelected = !_profile.DisabledCategories.Contains(cat.Name);
+        }
+        finally
+        {
+            _applyingProfile = false;
+        }
 
-        // Keep max 10 recent folders
-        while (RecentFolders.Count > 10)
-            RecentFolders.RemoveAt(RecentFolders.Count - 1);
+        foreach (var name in ProfileProperties)
+            OnPropertyChanged(name);
+
+        _ = RefreshFilesAsync();
     }
 
     private void SelectDestinationFolder()

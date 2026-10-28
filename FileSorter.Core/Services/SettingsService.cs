@@ -107,10 +107,12 @@ public static class SettingsService
     {
         settings.Version = 2;
         settings.SelectedViewMode = ValidOrDefault(settings.SelectedViewMode, FileViewMode.Tree);
-        settings.Folders ??= [];
+        settings.Folders = DistinctValidFolders(settings.Folders ?? []);
 
         foreach (var p in settings.Folders)
         {
+            if (string.IsNullOrEmpty(p.Name))
+                p.Name = FolderProfile.CreateDefault(p.FullPath).Name;
             p.Method = ValidOrDefault(p.Method, OrganizeMethod.ByType);
             p.DateGranularity = ValidOrDefault(p.DateGranularity, DateGranularity.Month);
             p.Unmatched = ValidOrDefault(p.Unmatched, UnmatchedFilesMode.OrganizeNormally);
@@ -129,6 +131,23 @@ public static class SettingsService
                 }
             }
         }
+    }
+
+    /// <summary>Drops profiles without a usable path and keeps the first profile of each path.</summary>
+    private static List<FolderProfile> DistinctValidFolders(List<FolderProfile> folders)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<FolderProfile>();
+        foreach (var p in folders)
+        {
+            if (p == null || string.IsNullOrWhiteSpace(p.FullPath)) continue;
+            string key;
+            try { key = PathKey.Normalize(p.FullPath); }
+            catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { continue; }
+            if (seen.Add(key))
+                result.Add(p);
+        }
+        return result;
     }
 
     private static T ValidOrDefault<T>(T value, T fallback) where T : struct, Enum =>

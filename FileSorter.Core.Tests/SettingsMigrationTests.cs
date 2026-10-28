@@ -100,6 +100,24 @@ public class SettingsMigrationTests : TempDataDirTest
     }
 
     [Fact]
+    public void Load_V2_DropsEmptyPathsAndCollapsesDuplicates()
+    {
+        WriteSettings("""
+            { "Version": 2, "Folders": [
+              { "FullPath": "" },
+              { "FullPath": "   " },
+              { "FullPath": "C:/x/Dl", "CopyMode": true },
+              { "FullPath": "c:/x/dl/" },
+              { "FullPath": "C:/x/Other" } ] }
+            """);
+
+        var folders = SettingsService.Load().Folders;
+
+        Assert.Equal(["C:/x/Dl", "C:/x/Other"], folders.Select(f => f.FullPath));
+        Assert.True(folders[0].CopyMode); // the first occurrence wins
+    }
+
+    [Fact]
     public void FindProfile_IgnoresCaseAndTrailingSeparator()
     {
         var s = new AppSettings { Folders = { FolderProfile.CreateDefault(@"C:\Users\a\Downloads") } };

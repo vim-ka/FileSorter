@@ -45,6 +45,7 @@ public class OrganizeMethodToStringConverter : IValueConverter
                 OrganizeMethod.ByAlphabet => "Alphabet",
                 OrganizeMethod.BySize => "Size",
                 OrganizeMethod.ByDateTaken => "Photo",
+                OrganizeMethod.ByName => "Name",
                 _ => value.ToString()!
             }
             : value?.ToString() ?? string.Empty;
