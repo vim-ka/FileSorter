@@ -637,11 +637,9 @@ public class FileOrganizerService
         }
     }
 
-    private static bool PathsEqual(string a, string b) =>
-        string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
+    private static bool PathsEqual(string a, string b) => PathKey.Equal(a, b);
 
-    private static bool IsUnderFolder(string path, string folder) =>
-        Path.GetFullPath(path).StartsWith(FolderPrefix(folder), StringComparison.OrdinalIgnoreCase);
+    private static bool IsUnderFolder(string path, string folder) => PathKey.IsUnder(path, folder);
 
     /// <summary>Normalized folder path with a trailing separator, for prefix checks.</summary>
     private static string FolderPrefix(string folder) =>

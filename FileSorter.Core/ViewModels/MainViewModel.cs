@@ -460,50 +460,49 @@ public class MainViewModel : ObservableObject
         _theme.ApplyTheme(IsDarkTheme);
     }
 
+    // INTERIM (Task 2): the VM still holds one global set of options. They are mapped to/from the
+    // profile of the current folder; other recent folders keep their stored profiles. Task 3 replaces this.
     public void SaveSettings()
     {
+        var existing = SettingsService.Load();
         var settings = new AppSettings
         {
-            DestinationFolder = DestinationFolder,
             IsDarkTheme = IsDarkTheme,
-            IncludeSubfolders = IncludeSubfolders,
-            CopyMode = CopyMode,
-            ApplyFilters = ApplyFilters,
-            ApplyRules = ApplyRules,
-            RulesAndMode = RulesAndMode,
-            SkipDuplicates = SkipDuplicates,
-            SelectedMethod = SelectedMethod,
             SelectedViewMode = SelectedViewMode,
-            DestinationSubfolderPattern = DestinationSubfolderPattern,
-            SelectedDateGranularity = SelectedDateGranularity
+            StartWithWindows = existing.StartWithWindows,
+            PauseAll = existing.PauseAll,
+            TrayHintShown = existing.TrayHintShown
         };
 
-        // Add current folder to recent on save (so it appears in Recent on next launch)
+        // Current folder first (so it appears in Recent on next launch), then the other recents.
         if (!string.IsNullOrEmpty(SourceFolder))
         {
-            settings.RecentFolders.Add(new RecentFolderDto
-            {
-                FullPath = SourceFolder,
-                Name = CurrentFolderName,
-                FileCount = CurrentFolderFileCount
-            });
+            var profile = existing.FindProfile(SourceFolder) ?? FolderProfile.CreateDefault(SourceFolder);
+            profile.Name = CurrentFolderName;
+            profile.FileCount = CurrentFolderFileCount;
+            profile.DestinationFolder = DestinationFolder;
+            profile.IncludeSubfolders = IncludeSubfolders;
+            profile.CopyMode = CopyMode;
+            profile.ApplyFilters = ApplyFilters;
+            profile.SkipDuplicates = SkipDuplicates;
+            profile.Method = SelectedMethod;
+            profile.Template = DestinationSubfolderPattern ?? "";
+            profile.DateGranularity = SelectedDateGranularity;
+            settings.Folders.Add(profile);
         }
 
         foreach (var rf in RecentFolders)
         {
-            // Skip duplicates of current folder
-            if (rf.FullPath == SourceFolder) continue;
-            settings.RecentFolders.Add(new RecentFolderDto
-            {
-                FullPath = rf.FullPath,
-                Name = rf.Name,
-                FileCount = rf.FileCount
-            });
+            if (settings.FindProfile(rf.FullPath) != null) continue;
+            var profile = existing.FindProfile(rf.FullPath) ?? FolderProfile.CreateDefault(rf.FullPath);
+            profile.Name = rf.Name;
+            profile.FileCount = rf.FileCount;
+            settings.Folders.Add(profile);
         }
 
         // Keep max 10
-        if (settings.RecentFolders.Count > 10)
-            settings.RecentFolders = settings.RecentFolders.Take(10).ToList();
+        if (settings.Folders.Count > 10)
+            settings.Folders = settings.Folders.Take(10).ToList();
 
         SettingsService.Save(settings);
     }
@@ -511,35 +510,30 @@ public class MainViewModel : ObservableObject
     private void LoadSettings()
     {
         var settings = SettingsService.Load();
+        var current = settings.Folders.FirstOrDefault() ?? FolderProfile.CreateDefault("");
 
-        DestinationFolder = settings.DestinationFolder;
+        DestinationFolder = current.DestinationFolder;
         _isDarkTheme = settings.IsDarkTheme;
-        _includeSubfolders = settings.IncludeSubfolders;
-        _copyMode = settings.CopyMode;
-        _moveMode = !settings.CopyMode;
-        _applyFilters = settings.ApplyFilters;
-        _applyRules = settings.ApplyRules;
-        _rulesAndMode = settings.RulesAndMode;
-        _rulesOrMode = !settings.RulesAndMode;
-        _skipDuplicates = settings.SkipDuplicates;
-        _selectedMethod = ValidOrDefault(settings.SelectedMethod, OrganizeMethod.ByType);
-        _selectedViewMode = ValidOrDefault(settings.SelectedViewMode, FileViewMode.Tree);
-        _destinationSubfolderPattern = settings.DestinationSubfolderPattern ?? "";
-        _selectedDateGranularity = ValidOrDefault(settings.SelectedDateGranularity, DateGranularity.Month);
+        _includeSubfolders = current.IncludeSubfolders;
+        _copyMode = current.CopyMode;
+        _moveMode = !current.CopyMode;
+        _applyFilters = current.ApplyFilters;
+        _skipDuplicates = current.SkipDuplicates;
+        _selectedMethod = current.Method;
+        _selectedViewMode = settings.SelectedViewMode;
+        _destinationSubfolderPattern = current.Template;
+        _selectedDateGranularity = current.DateGranularity;
 
-        foreach (var dto in settings.RecentFolders)
+        foreach (var profile in settings.Folders)
         {
             RecentFolders.Add(new RecentFolder
             {
-                FullPath = dto.FullPath,
-                Name = dto.Name,
-                FileCount = dto.FileCount
+                FullPath = profile.FullPath,
+                Name = profile.Name,
+                FileCount = profile.FileCount
             });
         }
     }
-
-    private static T ValidOrDefault<T>(T value, T fallback) where T : struct, Enum =>
-        Enum.IsDefined(value) ? value : fallback;
 
     private void LoadCategories()
     {
