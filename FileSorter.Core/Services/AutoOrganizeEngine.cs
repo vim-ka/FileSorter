@@ -182,7 +182,7 @@ public sealed class AutoOrganizeEngine : IDisposable
             var run = RunContext.NewAuto();
             try
             {
-                operation = await _organizer.OrganizeAsync(selection.Ready, request, run);
+                operation = await _organizer.OrganizeAsync(selection.Ready, request, run, ct: _disposeCts.Token);
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {

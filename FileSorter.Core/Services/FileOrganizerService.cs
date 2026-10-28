@@ -43,6 +43,73 @@ public class FileOrganizerService
 
     private Task EnsureHistoryLoadedAsync() => _historyLoad ?? Task.CompletedTask;
 
+    /// <summary>Organize runs whose file loop has started and that are not yet recorded by their own continuation.</summary>
+    private readonly List<InFlightRun> _inFlight = [];
+
+    private sealed class InFlightRun(OrganizeOperation operation, Func<string> describe)
+    {
+        public OrganizeOperation Operation { get; } = operation;
+        public Func<string> Describe { get; } = describe;
+        /// <summary>The background file loop; never needs the UI thread to finish.</summary>
+        public Task Work { get; set; } = Task.CompletedTask;
+        public bool Recorded;
+        public volatile bool JournalChanged;
+    }
+
+    /// <summary>Adds the run's operation to history once (if it did anything); true when it was added now.</summary>
+    private bool TryRecord(InFlightRun run)
+    {
+        lock (_inFlight)
+        {
+            if (run.Recorded) return false;
+            run.Recorded = true;
+            run.Operation.Description = run.Describe();
+            if (run.Operation.Moves.Count == 0) return false;
+            _history.Add(run.Operation);
+            TrimHistory();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// For exit, on the UI thread after the runs' cancellation was requested: waits (bounded) for
+    /// the background file loops of in-flight organize runs, then records their operations and
+    /// writes history and the copy journal synchronously. Their own continuations (which need the
+    /// UI thread, blocked here) would run too late. Only background completion is awaited, so this
+    /// can't deadlock. False when some run didn't finish in time (it is not recorded).
+    /// </summary>
+    public bool CompleteInFlightRuns(TimeSpan timeout)
+    {
+        InFlightRun[] runs;
+        lock (_inFlight) runs = [.. _inFlight];
+
+        var allDone = true;
+        if (runs.Length > 0)
+        {
+            try { allDone = Task.WaitAll(runs.Select(r => r.Work).ToArray(), timeout); }
+            catch (AggregateException) { /* a loop failed: it is recorded like any failed run */ }
+        }
+
+        var added = false;
+        var journalChanged = false;
+        foreach (var run in runs.Where(r => r.Work.IsCompleted))
+        {
+            added |= TryRecord(run);
+            journalChanged |= run.JournalChanged;
+        }
+
+        // History loaded (or nothing would be lost by not writing): never overwrite the file with a partial list
+        if ((added || HistoryService.HasUnwrittenSaves) && _historyLoad is not { IsCompleted: false })
+        {
+            List<OrganizeOperation> snapshot;
+            lock (_inFlight) snapshot = [.. _history];
+            HistoryService.Save(snapshot);
+        }
+        if (journalChanged)
+            _journal.SaveNow();
+        return allDone;
+    }
+
     public async Task ClearHistoryAsync()
     {
         await EnsureHistoryLoadedAsync();
@@ -260,8 +327,14 @@ public class FileOrganizerService
         return preview;
     }
 
+    /// <summary>
+    /// Moves or copies the files as planned and records the operation in history (also when the
+    /// run fails midway or is cancelled, so whatever was done can be undone). Cancellation is
+    /// checked between files, never in the middle of one.
+    /// </summary>
     public async Task<OrganizeOperation> OrganizeAsync(
-        IReadOnlyList<FileItem> files, OrganizeRequest request, RunContext run, IProgress<int>? progress = null)
+        IReadOnlyList<FileItem> files, OrganizeRequest request, RunContext run, IProgress<int>? progress = null,
+        CancellationToken ct = default)
     {
         await EnsureHistoryLoadedAsync();
 
@@ -273,69 +346,76 @@ public class FileOrganizerService
             IsAuto = run.IsAuto,
             SourceFolder = request.SourceFolder
         };
+        if (ct.IsCancellationRequested) return operation;
+
+        var verb = copyMode ? "Copied" : "Moved";
+        var by = request.Template != null && request.Template.Contains('#') ? "template" : request.Method.ToString();
+        var folderName = FolderProfile.CreateDefault(request.SourceFolder).Name;
+        var inFlight = new InFlightRun(operation,
+            () => $"{(run.IsAuto ? "Auto · " : "")}{folderName}: {verb} {operation.Moves.Count(m => !m.WasDuplicate)} files by {by}");
         var duplicates = request.SkipDuplicates ? new DuplicateIndex() : null;
-        var journalChanged = false;
 
         try
         {
-            await Task.Run(() =>
+            lock (_inFlight)
             {
-                // Planning may read EXIF (ByDateTaken / #datetaken) — keep it off the UI thread
-                var plan = Plan(files, request);
-                int processed = 0;
-                int total = plan.Sum(g => g.Files.Count);
-
-                foreach (var group in plan)
+                inFlight.Work = Task.Run(() =>
                 {
-                    var folderPath = group.FolderPath;
+                    // Planning may read EXIF (ByDateTaken / #datetaken) — keep it off the UI thread
+                    var plan = Plan(files, request);
+                    int processed = 0;
+                    int total = plan.Sum(g => g.Files.Count);
 
-                    try
+                    foreach (var group in plan)
                     {
-                        Directory.CreateDirectory(folderPath);
-                        duplicates?.AddExistingFiles(folderPath);
-                    }
-                    catch
-                    {
-                        // Can't create or read the target folder — every file of the group fails
-                        operation.FailedFiles += group.Files.Count;
-                        processed += group.Files.Count;
-                        progress?.Report(processed * 100 / Math.Max(total, 1));
-                        continue;
-                    }
+                        if (ct.IsCancellationRequested) return;
+                        var folderPath = group.FolderPath;
 
-                    foreach (var file in group.Files)
-                    {
-                        processed++;
                         try
                         {
-                            ProcessFile(file, folderPath);
+                            Directory.CreateDirectory(folderPath);
+                            duplicates?.AddExistingFiles(folderPath);
                         }
                         catch
                         {
-                            operation.FailedFiles++;
+                            // Can't create or read the target folder — every file of the group fails
+                            operation.FailedFiles += group.Files.Count;
+                            processed += group.Files.Count;
+                            progress?.Report(processed * 100 / Math.Max(total, 1));
+                            continue;
                         }
-                        progress?.Report(processed * 100 / Math.Max(total, 1));
+
+                        foreach (var file in group.Files)
+                        {
+                            if (ct.IsCancellationRequested) return;
+                            processed++;
+                            try
+                            {
+                                ProcessFile(file, folderPath);
+                            }
+                            catch
+                            {
+                                operation.FailedFiles++;
+                            }
+                            progress?.Report(processed * 100 / Math.Max(total, 1));
+                        }
                     }
-                }
-            });
+                });
+                _inFlight.Add(inFlight);
+            }
+            await inFlight.Work;
         }
         finally
         {
-            // Record whatever was done, even if something unexpected aborted the loop,
-            // so it can still be undone.
-            var verb = copyMode ? "Copied" : "Moved";
-            var by = request.Template != null && request.Template.Contains('#') ? "template" : request.Method.ToString();
-            var folderName = FolderProfile.CreateDefault(request.SourceFolder).Name;
-            operation.Description = $"{(run.IsAuto ? "Auto · " : "")}{folderName}: {verb} {operation.Moves.Count(m => !m.WasDuplicate)} files by {by}";
+            // Record whatever was done, even if something unexpected aborted the loop, so it can
+            // still be undone — unless CompleteInFlightRuns (exit) already recorded and saved it.
+            var added = TryRecord(inFlight);
+            lock (_inFlight) _inFlight.Remove(inFlight);
 
-            if (operation.Moves.Count > 0)
-            {
-                _history.Add(operation);
-                TrimHistory();
+            if (added)
                 await HistoryService.SaveAsync(_history);
-            }
 
-            if (journalChanged)
+            if (inFlight.JournalChanged)
                 await _journal.SaveAsync();
         }
 
@@ -346,7 +426,7 @@ public class FileOrganizerService
             // Record what was actually read, not the scanned snapshot
             var info = new FileInfo(file.FullPath);
             _journal.Add(request.SourceFolder, file.FullPath, info.Length, info.LastWriteTimeUtc);
-            journalChanged = true;
+            inFlight.JournalChanged = true;
         }
 
         void ProcessFile(FileItem file, string folderPath)

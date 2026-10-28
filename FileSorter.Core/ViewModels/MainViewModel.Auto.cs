@@ -140,13 +140,23 @@ public partial class MainViewModel
 
     public bool HasAutoWarnings => AutoWarnings.Count > 0;
 
-    /// <summary>Saves settings and stops auto-organize. Idempotent; the view model is not used afterwards.</summary>
+    /// <summary>How long exit waits for running organize work to reach a file boundary.</summary>
+    internal static readonly TimeSpan ShutdownOrganizeTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Saves settings, stops auto-organize and running organize work (manual and auto): they stop
+    /// between files, and what they did is recorded in history (undoable) before this returns.
+    /// Called on the UI thread; waits only for background work, at most
+    /// <see cref="ShutdownOrganizeTimeout"/>. Idempotent; the view model is not used afterwards.
+    /// </summary>
     public void Shutdown()
     {
         if (_isShutDown) return;
         _isShutDown = true;
-        SaveSettings();
+        _organizeCts.Cancel();
         _engine.Dispose();
+        _organizer.CompleteInFlightRuns(ShutdownOrganizeTimeout);
+        SaveSettings();
     }
 
     private void ConfigureEngine()

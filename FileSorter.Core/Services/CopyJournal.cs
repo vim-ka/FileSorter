@@ -68,25 +68,46 @@ public class CopyJournal
     /// </summary>
     public async Task SaveAsync()
     {
-        await SaveLock.WaitAsync();
+        // No UI state is touched after the lock: continue anywhere, so a synchronous SaveNow on the
+        // UI thread never waits for a release that is queued behind it
+        await SaveLock.WaitAsync().ConfigureAwait(false);
         try
         {
-            List<Entry> snapshot;
-            lock (_gate)
-                snapshot = _entries.Values.Select(e => new Entry
-                {
-                    SourceFolder = e.SourceFolder,
-                    Path = e.Path,
-                    Size = e.Size,
-                    LastWriteTimeUtc = e.LastWriteTimeUtc
-                }).ToList();
-
-            await Task.Run(() => JsonFileStore.Save(JournalFile, snapshot));
+            await Task.Run(WriteSnapshot).ConfigureAwait(false);
         }
         finally
         {
             SaveLock.Release();
         }
+    }
+
+    /// <summary>Writes now, on the calling thread (exit). Waits only for a save already in progress.</summary>
+    public void SaveNow()
+    {
+        SaveLock.Wait();
+        try
+        {
+            WriteSnapshot();
+        }
+        finally
+        {
+            SaveLock.Release();
+        }
+    }
+
+    private void WriteSnapshot()
+    {
+        List<Entry> snapshot;
+        lock (_gate)
+            snapshot = _entries.Values.Select(e => new Entry
+            {
+                SourceFolder = e.SourceFolder,
+                Path = e.Path,
+                Size = e.Size,
+                LastWriteTimeUtc = e.LastWriteTimeUtc
+            }).ToList();
+
+        JsonFileStore.Save(JournalFile, snapshot);
     }
 
     /// <summary>True when the file was already copied and still has the same size and modification time.</summary>

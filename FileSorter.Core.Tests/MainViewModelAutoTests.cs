@@ -477,4 +477,27 @@ public sealed class MainViewModelAutoTests : TempDataDirTest
 
         Assert.True(SettingsService.Load().Folders.Single().CopyMode);
     });
+
+    [Fact]
+    public async Task Shutdown_DuringManualOrganize_RecordsWhatWasMovedWithoutDeadlock()
+    {
+        var dir = NewFolder("A");
+        for (int i = 0; i < 300; i++)
+            TestData.WriteFile(dir, $"f{i:D3}.txt");
+        await _host.Run(async () =>
+        {
+            var vm = _host.NewVm();
+            _host.AddFolder(vm, dir);
+            await Wait.UntilAsync(() => vm.OrganizeCommand.CanExecute(null) && vm.CurrentFolderFileCount == 300);
+
+            vm.OrganizeCommand.Execute(null);
+            await Wait.UntilAsync(() => Directory.Exists(Path.Combine(dir, "Documents")));
+            vm.Shutdown(); // on the UI thread, while the run's continuations can't run here
+        });
+
+        // Every file that left the folder is in the saved history, so it can be undone
+        var left = 300 - Directory.GetFiles(dir).Length;
+        var saved = await HistoryService.LoadAsync();
+        Assert.Equal(left, saved.Sum(op => op.Moves.Count));
+    }
 }

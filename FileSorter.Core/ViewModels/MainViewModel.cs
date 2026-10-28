@@ -29,6 +29,8 @@ public partial class MainViewModel : ObservableObject
     private readonly NotificationThrottle _notificationThrottle;
     private bool _notificationLoopRunning;
     private bool _isShutDown;
+    /// <summary>Cancelled on exit: manual organize runs stop between files.</summary>
+    private readonly CancellationTokenSource _organizeCts = new();
     private bool _isScanning;
 
     /// <summary>Scanned files of each organize target, keyed by <see cref="PathKey.Normalize"/>.</summary>
@@ -1027,7 +1029,7 @@ public partial class MainViewModel : ObservableObject
                     if (!Directory.Exists(request.SourceFolder))
                         throw new DirectoryNotFoundException("folder not found");
 
-                    var result = await _organizer.OrganizeAsync(files, request, run, progressReporter);
+                    var result = await _organizer.OrganizeAsync(files, request, run, progressReporter, _organizeCts.Token);
                     var summary = Summary(result, request.CopyMode);
                     parts.Add(jobs.Count == 1 ? $"Done! {summary.Moved} files {summary.Details}" : $"{name}: {summary.Moved} {summary.Details}");
                 }
