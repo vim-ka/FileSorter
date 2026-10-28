@@ -25,12 +25,26 @@ public sealed class ToastNotificationService : INotificationService, IDisposable
     private readonly Queue<string> _order = new();
     private bool _disposed;
 
+    /// <summary>
+    /// Registering for clicks (COM server, app identity) succeeded. When it failed, toasts are off
+    /// for this run: <see cref="ShowAutoOrganized"/> does nothing (the history still has every run).
+    /// </summary>
+    private readonly bool _available;
+
     /// <param name="onOpen">Shows the main window; invoked on the UI thread.</param>
     public ToastNotificationService(Dispatcher dispatcher, Action onOpen)
     {
         _dispatcher = dispatcher;
         _onOpen = onOpen;
-        ToastNotificationManagerCompat.OnActivated += OnActivated;
+        try
+        {
+            ToastNotificationManagerCompat.OnActivated += OnActivated;
+            _available = true;
+        }
+        catch (Exception)
+        {
+            // No notification platform or registration failed: the app must start anyway, without toasts
+        }
     }
 
     /// <summary>The process was started by a click on a toast (after the program had exited).</summary>
@@ -48,6 +62,7 @@ public sealed class ToastNotificationService : INotificationService, IDisposable
 
     public void ShowAutoOrganized(string title, string message, Action onUndo)
     {
+        if (!_available) return;
         var id = Guid.NewGuid().ToString("N");
         lock (_lock)
         {
@@ -114,6 +129,14 @@ public sealed class ToastNotificationService : INotificationService, IDisposable
             _callbacks.Clear();
             _order.Clear();
         }
-        ToastNotificationManagerCompat.OnActivated -= OnActivated;
+        if (!_available) return;
+        try
+        {
+            ToastNotificationManagerCompat.OnActivated -= OnActivated;
+        }
+        catch (Exception)
+        {
+            // Exiting anyway
+        }
     }
 }
