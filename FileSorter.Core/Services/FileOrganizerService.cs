@@ -14,6 +14,14 @@ public class FileOrganizerService
 
     private readonly List<OrganizeOperation> _history = [];
 
+    private readonly CopyJournal _journal;
+
+    public FileOrganizerService() : this(new CopyJournal()) { }
+
+    public FileOrganizerService(CopyJournal journal) => _journal = journal;
+
+    public CopyJournal Journal => _journal;
+
     public IReadOnlyList<OrganizeOperation> History => _history;
 
     private Task? _historyLoad;
@@ -26,9 +34,11 @@ public class FileOrganizerService
 
     private async Task LoadHistoryCoreAsync()
     {
+        var journalLoad = _journal.ReloadAsync();
         var loaded = await HistoryService.LoadAsync();
         _history.Clear();
         _history.AddRange(loaded);
+        await journalLoad;
     }
 
     private Task EnsureHistoryLoadedAsync() => _historyLoad ?? Task.CompletedTask;
@@ -264,6 +274,7 @@ public class FileOrganizerService
             SourceFolder = request.SourceFolder
         };
         var duplicates = request.SkipDuplicates ? new DuplicateIndex() : null;
+        var journalChanged = false;
 
         try
         {
@@ -323,9 +334,20 @@ public class FileOrganizerService
                 TrimHistory();
                 await HistoryService.SaveAsync(_history);
             }
+
+            if (journalChanged)
+                await _journal.SaveAsync();
         }
 
         return operation;
+
+        void JournalSource(FileItem file)
+        {
+            // Record what was actually read, not the scanned snapshot
+            var info = new FileInfo(file.FullPath);
+            _journal.Add(request.SourceFolder, file.FullPath, info.Length, info.LastWriteTimeUtc);
+            journalChanged = true;
+        }
 
         void ProcessFile(FileItem file, string folderPath)
         {
@@ -342,7 +364,10 @@ public class FileOrganizerService
             {
                 operation.SkippedDuplicates++;
                 if (copyMode)
+                {
+                    JournalSource(file);
                     return; // nothing to do — the original stays untouched
+                }
 
                 Directory.CreateDirectory(duplicatesFolder);
                 var dupPath = GetUniqueFileName(Path.Combine(duplicatesFolder, file.FileName));
@@ -371,6 +396,8 @@ public class FileOrganizerService
                 Size = written.Length,
                 LastWriteTimeUtc = written.LastWriteTimeUtc
             });
+            if (copyMode)
+                JournalSource(file);
             duplicates?.Add(destPath, written.Length, file.FullPath);
         }
     }
@@ -397,12 +424,14 @@ public class FileOrganizerService
                         case UndoOutcome.Restored:
                             move.IsUndone = true;
                             restored++;
+                            ForgetCopy(operation, move);
                             break;
                         case UndoOutcome.Gone:
                             // Nothing left to put back — don't keep the operation pending forever,
                             // which would shadow older operations for the Undo button.
                             move.IsUndone = true;
                             failed++;
+                            ForgetCopy(operation, move);
                             break;
                         default:
                             failed++;
@@ -423,6 +452,7 @@ public class FileOrganizerService
         // Partially undone operations stay in history so the rest can be retried
         operation.IsUndone = operation.Moves.All(m => m.IsUndone || !IsUndoable(m));
         await HistoryService.SaveAsync(_history);
+        await _journal.SaveAsync();
 
         return new UndoResult(restored, failed);
     }
@@ -461,6 +491,12 @@ public class FileOrganizerService
         Directory.CreateDirectory(Path.GetDirectoryName(move.SourcePath)!);
         File.Move(move.DestinationPath, move.SourcePath);
         return UndoOutcome.Restored;
+    }
+
+    private void ForgetCopy(OrganizeOperation operation, FileMove move)
+    {
+        if (move.WasCopied)
+            _journal.Remove(operation.SourceFolder, move.SourcePath);
     }
 
     private void TrimHistory() => HistoryService.Trim(_history);
