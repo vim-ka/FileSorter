@@ -227,7 +227,9 @@ public class FileOrganizerService
         var groups = new Dictionary<string, (IReadOnlyList<string> Segments, List<FileItem> Files)>(
             StringComparer.OrdinalIgnoreCase);
         var order = new List<string>();
-        var unmatched = new List<FileItem>();
+        // Organized by the method/template: unmatched files ("organize normally") and files of
+        // rules without a folder (the rule only selects them)
+        var normal = new List<FileItem>();
 
         void Add(string folderPath, IReadOnlyList<string> segments, IEnumerable<FileItem> items)
         {
@@ -246,18 +248,22 @@ public class FileOrganizerService
                 continue;
 
             var rule = request.Rules.FirstOrDefault(r => r.Matches(file));
-            if (rule != null)
+            if (rule is { OrganizesNormally: true })
+            {
+                normal.Add(file);
+            }
+            else if (rule != null)
             {
                 var folder = rule.ResolveFolder(target);
                 Add(folder, RuleDisplaySegments(folder, target), [file]);
             }
             else if (request.Unmatched == UnmatchedFilesMode.OrganizeNormally)
             {
-                unmatched.Add(file);
+                normal.Add(file);
             }
         }
 
-        foreach (var (key, items) in GroupFiles(unmatched, request))
+        foreach (var (key, items) in GroupFiles(normal, request))
         {
             var folder = Path.Combine(target, key.Replace('/', Path.DirectorySeparatorChar));
             Add(folder, key.Split('/', '\\'), items);

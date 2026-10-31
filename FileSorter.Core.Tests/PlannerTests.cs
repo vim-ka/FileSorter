@@ -83,20 +83,33 @@ public class PlannerTests : TempDataDirTest
     }
 
     [Fact]
-    public void Plan_DisabledRuleOrEmptyDestination_Ignored()
+    public void Plan_DisabledRule_Ignored()
     {
         var disabled = Rule("Movies", RuleField.Extension, RuleOperator.Is, "mp4");
         disabled.IsEnabled = false;
-        var empty = Rule("  ", RuleField.Extension, RuleOperator.Is, "mp4");
         Assert.Null(disabled.Snapshot());
-        Assert.Null(empty.Snapshot());
 
-        var request = Request(rules: [disabled, empty]);
+        var request = Request(rules: [disabled]);
         Assert.Empty(request.Rules);
 
         var plan = FileOrganizerService.Plan([File("clip.mp4")], request);
 
         Assert.Equal(Path.Combine(Target, "Videos"), Assert.Single(plan).FolderPath);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("  ")]
+    public void Plan_EmptyDestination_OrganizesMatchingFilesByTheMethod_EvenWhenOthersStay(string destination)
+    {
+        var request = Request(UnmatchedFilesMode.LeaveInPlace,
+            Rule(destination, RuleField.Extension, RuleOperator.Is, "mp4"));
+
+        var group = Assert.Single(FileOrganizerService.Plan([File("clip.mp4"), File("notes.txt")], request));
+
+        Assert.Equal(Path.Combine(Target, "Videos"), group.FolderPath); // by type, like any other file
+        Assert.Equal(["Videos"], group.DisplaySegments);
+        Assert.Equal("clip.mp4", Assert.Single(group.Files).FileName);
     }
 
     [Fact]

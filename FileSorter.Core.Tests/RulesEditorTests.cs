@@ -107,18 +107,21 @@ public class RulesEditorTests : TempDataDirTest
     });
 
     [Fact]
-    public Task RuleWithEmptyDestination_LeavesPreviewUnchanged() => _host.Run(async () =>
+    public Task RuleWithoutFolder_SelectsFilesThatAreOrganizedByTheMethod() => _host.Run(async () =>
     {
         var dir = TestData.NewTempDir("Src");
         TestData.WriteFile(dir, "clip.mp4");
         TestData.WriteFile(dir, "notes.txt");
         var vm = await ScannedVm(this, dir);
+        vm.Unmatched = UnmatchedFilesMode.LeaveInPlace;
 
         vm.AddRuleCommand.Execute(null);
+        Assert.Equal("", vm.RulesActiveText); // blank condition value: not active yet
         vm.Rules.Single().Conditions.Single().Value = "mp4";
 
-        Assert.Equal("", vm.RulesActiveText);
-        Assert.Equal(["MP4", "TXT"], (await SettledPreviewByExtension(vm)).Order());
+        Assert.Equal("RULES ON", vm.RulesActiveText);
+        vm.SelectedMethod = OrganizeMethod.ByExtension;
+        await Wait.UntilAsync(() => !vm.IsScanning && PreviewFolders(vm).SequenceEqual(["MP4"]));
     });
 
     [Fact]
@@ -163,6 +166,77 @@ public class RulesEditorTests : TempDataDirTest
         condition.RemoveCommand.Execute(null);
         Assert.Equal(conditionsBefore, rule.Conditions.Count);
         Assert.DoesNotContain(model, a.Profile.Rules[0].Conditions);
+    });
+
+    [Fact]
+    public Task RuleFolder_HiddenUntilAdded_RemovingItClearsTheDestination() => _host.Run(() =>
+    {
+        var vm = NewVm();
+        AddFolder(vm, TestData.NewTempDir("A"));
+        vm.AddRuleCommand.Execute(null);
+        var rule = vm.Rules.Single();
+        Assert.False(rule.HasFolder); // new rule: files go to the destination folder itself
+
+        rule.AddFolderCommand.Execute(null);
+        Assert.True(rule.HasFolder);
+        Assert.Equal("", rule.Destination); // shown, still empty
+
+        rule.Destination = "Movies";
+        rule.RemoveFolderCommand.Execute(null);
+        Assert.False(rule.HasFolder);
+        Assert.Equal("", rule.Model.Destination);
+
+        // a rule saved with a folder shows it
+        Assert.True(new RoutingRuleViewModel(new RoutingRule { Destination = "Trips" }).HasFolder);
+    });
+
+    [Fact]
+    public Task LastCondition_CannotBeRemoved_SoARuleNeverSilentlyMatchesEverything() => _host.Run(() =>
+    {
+        var vm = NewVm();
+        AddFolder(vm, TestData.NewTempDir("A"));
+        var rule = AddRule(vm, "A");
+        var only = rule.Conditions.Single();
+        Assert.False(only.RemoveCommand.CanExecute(null));
+        only.RemoveCommand.Execute(null);
+        Assert.Single(rule.Conditions);
+        Assert.Single(rule.Model.Conditions);
+
+        int raised = 0;
+        only.RemoveCommand.CanExecuteChanged += (_, _) => raised++;
+        rule.AddConditionCommand.Execute(null);
+        Assert.True(raised > 0);
+        Assert.True(only.RemoveCommand.CanExecute(null));
+        Assert.True(rule.Conditions[1].RemoveCommand.CanExecute(null));
+
+        rule.Conditions[1].RemoveCommand.Execute(null);
+        Assert.Same(only, rule.Conditions.Single());
+        Assert.False(only.RemoveCommand.CanExecute(null));
+    });
+
+    [Fact]
+    public Task MoveRuleCommands_DisabledWhereThereIsNowhereToMove() => _host.Run(() =>
+    {
+        var vm = NewVm();
+        AddFolder(vm, TestData.NewTempDir("A"));
+        var a = AddRule(vm, "A");
+        Assert.False(vm.MoveRuleUpCommand.CanExecute(a));
+        Assert.False(vm.MoveRuleDownCommand.CanExecute(a));
+
+        int raised = 0;
+        vm.MoveRuleDownCommand.CanExecuteChanged += (_, _) => raised++;
+        var b = AddRule(vm, "B");
+        Assert.True(raised > 0);
+        Assert.False(vm.MoveRuleUpCommand.CanExecute(a));
+        Assert.True(vm.MoveRuleDownCommand.CanExecute(a));
+        Assert.True(vm.MoveRuleUpCommand.CanExecute(b));
+        Assert.False(vm.MoveRuleDownCommand.CanExecute(b));
+
+        raised = 0;
+        vm.MoveRuleUpCommand.Execute(b);
+        Assert.True(raised > 0);
+        Assert.False(vm.MoveRuleUpCommand.CanExecute(b));
+        Assert.True(vm.MoveRuleDownCommand.CanExecute(b));
     });
 
     [Fact]
@@ -244,9 +318,6 @@ public class RulesEditorTests : TempDataDirTest
         await Wait.UntilAsync(() => vm.StatusText.Contains("will be organized"));
 
         var rule = AddRule(vm, "Movies");
-        foreach (var existing in rule.Conditions.ToList())
-            existing.RemoveCommand.Execute(null);
-        rule.AddConditionCommand.Execute(null);
         var condition = rule.Conditions.Single();
         condition.Field = RuleField.Extension;
         condition.Operator = RuleOperator.Is;
@@ -306,9 +377,6 @@ public class RulesEditorTests : TempDataDirTest
         await Wait.UntilAsync(() => vm.StatusText.Contains("will be organized"));
 
         var rule = AddRule(vm, video);
-        foreach (var existing in rule.Conditions.ToList())
-            existing.RemoveCommand.Execute(null);
-        rule.AddConditionCommand.Execute(null);
         rule.Conditions[0].Field = RuleField.Extension;
         rule.Conditions[0].Operator = RuleOperator.Is;
         rule.Conditions[0].Value = "mp4";

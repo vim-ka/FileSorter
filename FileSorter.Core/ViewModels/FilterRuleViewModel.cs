@@ -50,11 +50,18 @@ public class FilterRuleViewModel : ObservableObject
     public RuleOperator[] AvailableOperators => FilterRuleSnapshot.OperatorsFor(Field);
 
     public event Action? RemoveRequested;
-    public ICommand RemoveCommand { get; }
+
+    private readonly RelayCommand _removeCommand;
+    public ICommand RemoveCommand => _removeCommand;
+
+    /// <summary>Set by the owning rule: whether this condition may be removed right now.</summary>
+    public Func<bool> CanRemove { get; set; } = () => true;
 
     public FilterRuleViewModel(FilterRule model)
     {
         Model = model;
-        RemoveCommand = new RelayCommand(_ => RemoveRequested?.Invoke());
+        _removeCommand = new RelayCommand(_ => RemoveRequested?.Invoke(), _ => CanRemove());
     }
+
+    public void RaiseCanRemoveChanged() => _removeCommand.RaiseCanExecuteChanged();
 }

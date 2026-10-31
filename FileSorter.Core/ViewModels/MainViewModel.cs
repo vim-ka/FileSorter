@@ -46,7 +46,7 @@ public partial class MainViewModel : ObservableObject
     private bool _applyingProfile;
     private bool _isOrganizing;
     private int _progress;
-    private string _statusText = "Select a folder to start";
+    private string _statusText = "Check a folder to organize it";
     private int _totalFiles;
     private bool _isDarkTheme = true;
     private bool _showHistory;
@@ -84,18 +84,10 @@ public partial class MainViewModel : ObservableObject
     public int CurrentFolderFileCount => _selectedFolder?.FileCount ?? 0;
 
     /// <summary>
-    /// Folders the Organize button processes and the preview shows: the checked folders in list
-    /// order if any are checked (the selected folder only if it is checked too), else the selected folder.
+    /// Folders the Organize button processes and the preview shows: only the checked folders, in list
+    /// order. Selecting a folder just shows its settings; it is processed only when checked.
     /// </summary>
-    public IReadOnlyList<FolderViewModel> OrganizeTargets
-    {
-        get
-        {
-            var checkedFolders = Folders.Where(f => f.IsChecked).ToList();
-            if (checkedFolders.Count > 0) return checkedFolders;
-            return _selectedFolder != null ? [_selectedFolder] : [];
-        }
-    }
+    public IReadOnlyList<FolderViewModel> OrganizeTargets => Folders.Where(f => f.IsChecked).ToList();
 
     public string OrganizeButtonText =>
         OrganizeTargets.Count is var n && n > 1 ? $"ORGANIZE {n} FOLDERS" : "ORGANIZE";
@@ -346,8 +338,8 @@ public partial class MainViewModel : ObservableObject
     public AsyncRelayCommand UndoCommand { get; }
     public ICommand AddRuleCommand { get; }
     public ICommand RemoveRuleCommand { get; }
-    public ICommand MoveRuleUpCommand { get; }
-    public ICommand MoveRuleDownCommand { get; }
+    public RelayCommand MoveRuleUpCommand { get; }
+    public RelayCommand MoveRuleDownCommand { get; }
     public ICommand BrowseRuleDestinationCommand { get; }
     public ICommand SetMethodCommand { get; }
     public RelayCommand SelectFolderCommand { get; }
@@ -404,11 +396,17 @@ public partial class MainViewModel : ObservableObject
         MoveRuleUpCommand = new RelayCommand(p =>
         {
             if (p is RoutingRuleViewModel r) MoveRule(r, -1);
-        });
+        }, p => p is RoutingRuleViewModel r && Rules.IndexOf(r) > 0);
         MoveRuleDownCommand = new RelayCommand(p =>
         {
             if (p is RoutingRuleViewModel r) MoveRule(r, +1);
-        });
+        }, p => p is RoutingRuleViewModel r && Rules.IndexOf(r) is var i && i >= 0 && i < Rules.Count - 1);
+        // Moving, adding or removing a rule changes which ends of the list can't move further
+        Rules.CollectionChanged += (_, _) =>
+        {
+            MoveRuleUpCommand.RaiseCanExecuteChanged();
+            MoveRuleDownCommand.RaiseCanExecuteChanged();
+        };
         BrowseRuleDestinationCommand = new RelayCommand(p =>
         {
             if (p is RoutingRuleViewModel r && _dialogs.PickFolder("Select Rule Destination") is { } path)
@@ -684,6 +682,8 @@ public partial class MainViewModel : ObservableObject
             SaveSettingsInBackground();
         }
         SelectFolder(folder);
+        // A folder the user just added is meant to be organized: check it so it is scanned and shown
+        folder.IsChecked = true;
     }
 
     private void RemoveFolder(FolderViewModel folder)
@@ -714,8 +714,8 @@ public partial class MainViewModel : ObservableObject
     ];
 
     /// <summary>
-    /// Shows the folder's profile in the UI; null clears the selection. Without checked folders the
-    /// selected folder is the organize target, so it is rescanned. Ignored while organizing.
+    /// Shows the folder's profile in the UI; null clears the selection. Selecting doesn't make a
+    /// folder an organize target (only checking does). Ignored while organizing.
     /// </summary>
     private void SelectFolder(FolderViewModel? folder)
     {
@@ -806,7 +806,7 @@ public partial class MainViewModel : ObservableObject
             IsScanning = false;
             OrganizeCommand.RaiseCanExecuteChanged();
             await RefreshPreviewAsync();
-            StatusText = _pinnedStatus ?? "Select a folder to start";
+            StatusText = _pinnedStatus ?? "Check a folder to organize it";
             return;
         }
 
@@ -854,6 +854,7 @@ public partial class MainViewModel : ObservableObject
         var ct = cts.Token;
         TotalFiles = ScannedCount;
         IsScanning = true;
+        _lastFlatRebuild = DateTime.MinValue; // the first refresh of a scan shows the file list
         if (_pinnedStatus == null) StatusText = "Scanning...";
 
         try

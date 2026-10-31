@@ -118,6 +118,9 @@
                             <Setter TargetName="border" Property="Background" Value="{StaticResource TertiaryBackgroundBrush}" />
                             <Setter Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
                         </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.3" />
+                        </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>

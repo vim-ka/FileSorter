@@ -33,6 +33,16 @@ public class InverseBoolConverter : IValueConverter
         value is bool b ? !b : value;
 }
 
+/// <summary>bool ↔ index of a two-item selector: false → 0, true → 1 (e.g. CopyMode for "Move to" / "Copy to").</summary>
+public class BoolToIndexConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>
+        value is true ? 1 : 0;
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+        value is int index ? index == 1 : Binding.DoNothing;
+}
+
 public class OrganizeMethodToStringConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>

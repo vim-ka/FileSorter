@@ -107,6 +107,35 @@ public class MultiFolderTests : TempDataDirTest
     }
 
     [Fact]
+    public void Build_ByType_StatsCountOnlyFilesThatWillBeOrganized_AndHideEmptyOnes()
+    {
+        // rule: jpg → destination root; other files stay in place
+        var jpgRule = new RoutingRule
+        {
+            Conditions = [new FilterRule { Field = RuleField.Extension, Operator = RuleOperator.Is, Value = "jpg" }]
+        }.Snapshot()!;
+        var request = Request(@"C:\dl", OrganizeMethod.ByType) with
+        {
+            Rules = [jpgRule], Unmatched = UnmatchedFilesMode.LeaveInPlace,
+            AllowedCategories = new HashSet<string> { "Images", "Documents" }
+        };
+        var files = new List<FileItem>
+        {
+            TestData.Item(@"C:\dl\a.jpg"), TestData.Item(@"C:\dl\b.jpg"),
+            TestData.Item(@"C:\dl\c.txt"), TestData.Item(@"C:\dl\d.zip")
+        };
+
+        var result = PreviewBuilder.Build([new("Downloads", request, files)], Colors, _ => null);
+
+        Assert.Equal(2, result.FileCount);
+        Assert.Equal(2, result.Stats.Single(s => s.Name == "Images").Count);
+        Assert.DoesNotContain(result.Stats, s => s.Name == "Documents"); // all left in place: nothing to show
+        var archives = result.Stats.Single(s => s.Name == "Archives"); // filtered out: shows what it would add
+        Assert.False(archives.IsSelected);
+        Assert.Equal(1, archives.Count);
+    }
+
+    [Fact]
     public void Build_OneSource_KeepsDestinationRootAndByTypeStats()
     {
         var sources = new List<PreviewSource>
@@ -124,14 +153,17 @@ public class MultiFolderTests : TempDataDirTest
     }
 
     [Fact]
-    public Task OrganizeTargets_CheckedWin_ElseSelected() => _host.Run(() =>
+    public Task OrganizeTargets_OnlyCheckedFolders_AddedFoldersAreChecked() => _host.Run(() =>
     {
         var vm = NewVm();
         var a = AddFolder(vm, TestData.NewTempDir("A"));
         var b = AddFolder(vm, TestData.NewTempDir("B"));
         var c = AddFolder(vm, TestData.NewTempDir("C"));
+        Assert.Equal([c, b, a], vm.OrganizeTargets);
 
-        Assert.Equal([c], vm.OrganizeTargets);
+        a.IsChecked = b.IsChecked = c.IsChecked = false;
+        Assert.Same(c, vm.SelectedFolder);
+        Assert.Empty(vm.OrganizeTargets); // selected but unchecked: not processed
         Assert.Equal("ORGANIZE", vm.OrganizeButtonText);
 
         a.IsChecked = true;
@@ -253,10 +285,10 @@ public class MultiFolderTests : TempDataDirTest
         var vm = NewVm();
         var a = AddFolder(vm, dirA);
         vm.IncludeSubfolders = false;
-        var b = AddFolder(vm, dirB);
-        Assert.True(vm.IncludeSubfolders); // B keeps the default (recursive)
         Directory.CreateDirectory(Path.Combine(dirB, "sub"));
         TestData.WriteFile(Path.Combine(dirB, "sub"), "deep.txt");
+        var b = AddFolder(vm, dirB);
+        Assert.True(vm.IncludeSubfolders); // B keeps the default (recursive)
 
         a.IsChecked = true;
         b.IsChecked = true;

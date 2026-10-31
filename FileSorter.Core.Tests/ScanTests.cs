@@ -55,7 +55,8 @@ public class ScanTests : TempDataDirTest
         AddFolder(vm, dialogs, dirA);
         await WaitUntilAsync(() => !dispatcher.Queue.IsEmpty); // A's first batch is posted, not yet applied
 
-        AddFolder(vm, dialogs, dirB); // cancels A, resets the list, starts B
+        vm.Folders.Single(f => f.FullPath == dirA).IsChecked = false; // cancels A's scan
+        AddFolder(vm, dialogs, dirB); // starts B
 
         await dispatcher.RunOneAsync(); // the stale batch from A lands now
         await dispatcher.RunOneAsync(); // B's batch

@@ -28,7 +28,7 @@ public static class PreviewBuilder
 
     /// <summary>
     /// One source: a single "Destination → X" root; ByType without a template shows every category
-    /// (filtered-out ones as unselected). Several: a "{FolderName} → X" root per folder; stats are
+    /// with files that will be organized, plus the filtered-out ones (unselected, with their full count). Several: a "{FolderName} → X" root per folder; stats are
     /// top-level group names summed across folders; view group keys are "{FolderName}/{group}".
     /// </summary>
     public static PreviewResult Build(IReadOnlyList<PreviewSource> sources, IReadOnlyList<RgbColor> colors,
@@ -115,12 +115,21 @@ public static class PreviewBuilder
             int groupCount = isSelected
                 ? filtered.Count(f => FileCategoryService.GetCategoryName(f.Extension, categories) == kv.Key)
                 : 0;
+            // Selected but nothing of it is organized (rules / "leave in place"): an empty row helps no one
+            // (its color index is still used, so every category keeps its color)
+            if (isSelected && groupCount == 0)
+            {
+                colorIndex++;
+                continue;
+            }
             double pct = isSelected && total > 0 ? (double)groupCount / total : 0;
             double sweep = pct * 360;
 
+            // Selected: files that will really be organized (rules / "leave in place" may skip some);
+            // filtered out: every file of the category, i.e. what checking it would add
             stats.Add(new CategoryStats
             {
-                Name = kv.Key, Count = kv.Value, Color = colors[colorIndex % colors.Count],
+                Name = kv.Key, Count = isSelected ? groupCount : kv.Value, Color = colors[colorIndex % colors.Count],
                 Percentage = pct * 100, StartAngle = angle,
                 SweepAngle = sweep, IsSelected = isSelected
             });

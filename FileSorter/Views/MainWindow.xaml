@@ -25,6 +25,7 @@
         <conv:BoolToVisibilityConverter x:Key="BoolToVis" />
         <conv:InverseBoolToVisibilityConverter x:Key="InvBoolToVis" />
         <conv:InverseBoolConverter x:Key="InverseBool" />
+        <conv:BoolToIndexConverter x:Key="BoolToIndex" />
         <conv:OrganizeMethodToStringConverter x:Key="MethodToString" />
         <conv:BoolToFolderIconConverter x:Key="BoolToFolderIcon" />
         <conv:BoolToFontWeightConverter x:Key="BoolToFontWeight" />
@@ -407,15 +408,16 @@
                             <ItemsControl ItemsSource="{Binding Rules}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
+                                        <!-- Accent stripe on the left marks where each rule starts and ends -->
                                         <Border Background="{StaticResource TertiaryBackgroundBrush}"
-                                                CornerRadius="6" Padding="8" Margin="0,0,0,6">
+                                                BorderBrush="{StaticResource AccentBrush}" BorderThickness="3,0,0,0"
+                                                CornerRadius="6" Padding="8" Margin="0,0,0,8">
                                             <StackPanel>
-                                                <!-- On/off, destination, browse, order, remove -->
+                                                <!-- On/off, order, remove -->
                                                 <Grid Margin="0,0,0,6">
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="Auto" />
                                                         <ColumnDefinition Width="*" />
-                                                        <ColumnDefinition Width="Auto" />
                                                         <ColumnDefinition Width="Auto" />
                                                         <ColumnDefinition Width="Auto" />
                                                         <ColumnDefinition Width="Auto" />
@@ -427,25 +429,12 @@
                                                               VerticalAlignment="Center"
                                                               ToolTip="Rule enabled" />
 
-                                                    <TextBox Grid.Column="1"
-                                                             Text="{Binding Destination, UpdateSourceTrigger=PropertyChanged}"
-                                                             FontSize="12" Padding="6,4"
-                                                             Background="{StaticResource SecondaryBackgroundBrush}"
-                                                             Foreground="{StaticResource PrimaryTextBrush}"
-                                                             BorderBrush="{StaticResource BorderBrush}"
-                                                             BorderThickness="1"
-                                                             Margin="0,0,4,0"
-                                                             ToolTip="Destination: a subfolder of the target (Movies) or a full path (D:\Video)" />
+                                                    <TextBlock Grid.Column="1" Text="Rule"
+                                                               Foreground="{StaticResource PrimaryTextBrush}"
+                                                               FontSize="13" FontWeight="SemiBold"
+                                                               VerticalAlignment="Center" Margin="2,0,0,0" />
 
                                                     <Button Grid.Column="2"
-                                                            Style="{StaticResource IconButton}"
-                                                            Command="{Binding DataContext.BrowseRuleDestinationCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                            CommandParameter="{Binding}"
-                                                            Content="&#xE8B7;"
-                                                            FontSize="11" Padding="4"
-                                                            ToolTip="Browse for destination folder" />
-
-                                                    <Button Grid.Column="3"
                                                             Style="{StaticResource IconButton}"
                                                             Command="{Binding DataContext.MoveRuleUpCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                             CommandParameter="{Binding}"
@@ -453,7 +442,7 @@
                                                             FontSize="11" Padding="4"
                                                             ToolTip="Move up" />
 
-                                                    <Button Grid.Column="4"
+                                                    <Button Grid.Column="3"
                                                             Style="{StaticResource IconButton}"
                                                             Command="{Binding DataContext.MoveRuleDownCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                             CommandParameter="{Binding}"
@@ -461,7 +450,7 @@
                                                             FontSize="11" Padding="4"
                                                             ToolTip="Move down" />
 
-                                                    <Button Grid.Column="5"
+                                                    <Button Grid.Column="4"
                                                             Style="{StaticResource IconButton}"
                                                             Command="{Binding DataContext.RemoveRuleCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                             CommandParameter="{Binding}"
@@ -469,6 +458,7 @@
                                                             FontSize="11" Padding="4"
                                                             ToolTip="Remove rule" />
                                                 </Grid>
+                                                <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,0,0,8" />
 
                                                 <!-- All / Any (the pair is grouped by its own panel) -->
                                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
@@ -534,12 +524,98 @@
                                                     </ItemsControl.ItemTemplate>
                                                 </ItemsControl>
 
-                                                <Button Style="{StaticResource SecondaryButton}"
-                                                        Command="{Binding AddConditionCommand}"
-                                                        HorizontalAlignment="Left"
-                                                        Padding="8,3" Margin="0,2,0,0">
-                                                    <TextBlock Text="+ condition" FontFamily="Segoe UI" FontSize="11" />
-                                                </Button>
+                                                <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                                    <Button Style="{StaticResource SecondaryButton}"
+                                                            Command="{Binding AddConditionCommand}"
+                                                            Padding="8,3">
+                                                        <TextBlock Text="+ condition" FontFamily="Segoe UI" FontSize="11" />
+                                                    </Button>
+                                                    <!-- Without a folder, matching files go to the destination folder itself -->
+                                                    <Button Style="{StaticResource SecondaryButton}"
+                                                            Command="{Binding AddFolderCommand}"
+                                                            Padding="8,3" Margin="6,0,0,0"
+                                                            Visibility="{Binding HasFolder, Converter={StaticResource InvBoolToVis}}"
+                                                            ToolTip="Send matching files to their own folder; without one they are organized like the others (method or template)">
+                                                        <TextBlock Text="+ folder" FontFamily="Segoe UI" FontSize="11" />
+                                                    </Button>
+                                                </StackPanel>
+
+                                                <!-- Arrow: files matching the conditions go to the destination below -->
+                                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,6,0,4"
+                                                            Visibility="{Binding HasFolder, Converter={StaticResource BoolToVis}}">
+                                                    <Path Data="M 8,1 L 8,19 M 2,13 L 8,19 L 14,13"
+                                                          Stroke="{StaticResource AccentBrush}" StrokeThickness="2"
+                                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                          StrokeLineJoin="Round"
+                                                          Width="16" Height="20" VerticalAlignment="Center" />
+                                                    <TextBlock Text="matching files go to"
+                                                               Foreground="{StaticResource SecondaryTextBrush}"
+                                                               FontSize="11" FontStyle="Italic"
+                                                               VerticalAlignment="Center" Margin="8,0,0,0" />
+                                                </StackPanel>
+
+                                                <!-- Destination of the rule -->
+                                                <Border BorderBrush="{StaticResource AccentBrush}" BorderThickness="1"
+                                                        CornerRadius="4" Background="{StaticResource SecondaryBackgroundBrush}"
+                                                        Padding="6,2,2,2"
+                                                        Visibility="{Binding HasFolder, Converter={StaticResource BoolToVis}}">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="Auto" />
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                        </Grid.ColumnDefinitions>
+
+                                                        <TextBlock Grid.Column="0" Text="&#xE8B7;"
+                                                                   FontFamily="Segoe MDL2 Assets" FontSize="13"
+                                                                   Foreground="{StaticResource AccentBrush}"
+                                                                   VerticalAlignment="Center" Margin="0,0,6,0" />
+
+                                                        <TextBox x:Name="RuleDestination" Grid.Column="1"
+                                                                 Text="{Binding Destination, UpdateSourceTrigger=PropertyChanged}"
+                                                                 FontSize="12" Padding="2,4"
+                                                                 Background="Transparent"
+                                                                 Foreground="{StaticResource PrimaryTextBrush}"
+                                                                 CaretBrush="{StaticResource PrimaryTextBrush}"
+                                                                 BorderThickness="0"
+                                                                 VerticalContentAlignment="Center"
+                                                                 ToolTip="A name (Movies) is a subfolder of the destination folder, a full path (D:\Video) is used as is. Empty: matching files are organized like the others (method or template)." />
+
+                                                        <!-- Placeholder while the destination is empty -->
+                                                        <TextBlock Grid.Column="1" Text="Subfolder name or full path"
+                                                                   IsHitTestVisible="False"
+                                                                   Foreground="{StaticResource SecondaryTextBrush}"
+                                                                   FontSize="12" Opacity="0.7"
+                                                                   VerticalAlignment="Center" Margin="4,0,0,0">
+                                                            <TextBlock.Style>
+                                                                <Style TargetType="TextBlock">
+                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding Text, ElementName=RuleDestination}" Value="">
+                                                                            <Setter Property="Visibility" Value="Visible" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </TextBlock.Style>
+                                                        </TextBlock>
+
+                                                        <Button Grid.Column="2"
+                                                                Style="{StaticResource IconButton}"
+                                                                Command="{Binding DataContext.BrowseRuleDestinationCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                CommandParameter="{Binding}"
+                                                                Content="&#xE712;"
+                                                                FontSize="11" Padding="6,4"
+                                                                ToolTip="Browse for destination folder" />
+
+                                                        <Button Grid.Column="3"
+                                                                Style="{StaticResource IconButton}"
+                                                                Command="{Binding RemoveFolderCommand}"
+                                                                Content="&#xE711;"
+                                                                FontSize="11" Padding="6,4"
+                                                                ToolTip="Remove folder: matching files are organized like the others (method or template)" />
+                                                    </Grid>
+                                                </Border>
                                             </StackPanel>
                                         </Border>
                                     </DataTemplate>
@@ -581,27 +657,48 @@
                             </Grid>
 
                             <!-- Separator -->
-                            <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,6,0,8" />
+                            <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,10,0,10" />
 
-                            <!-- Move to / Copy to + Destination -->
+                            <!-- Destination of this folder: copy/move, target folder, subfolder template -->
+                            <TextBlock Text="Destination"
+                                       Foreground="{StaticResource SecondaryTextBrush}"
+                                       FontSize="12" FontWeight="SemiBold"
+                                       Margin="0,0,0,2" />
+                            <TextBlock Text="For all files of this folder; short rule folders go inside it"
+                                       Foreground="{StaticResource SecondaryTextBrush}"
+                                       FontSize="11" FontStyle="Italic" Opacity="0.8"
+                                       TextWrapping="Wrap" Margin="0,0,0,8" />
+
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
 
-                                <ComboBox Grid.Column="0" FontSize="12" Padding="6,4"
-                                          Margin="0,0,6,0" MinWidth="80"
-                                          SelectedIndex="{Binding MoveMode, Converter={StaticResource InverseBool}}">
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="Files"
+                                           Foreground="{StaticResource SecondaryTextBrush}"
+                                           FontSize="12" VerticalAlignment="Center"
+                                           Margin="0,0,10,6" />
+
+                                <ComboBox Grid.Row="0" Grid.Column="1" FontSize="12" Padding="6,4"
+                                          Margin="0,0,6,6" MinWidth="80"
+                                          SelectedIndex="{Binding CopyMode, Converter={StaticResource BoolToIndex}}"
+                                          ToolTip="Move or copy files (rules included)">
                                     <ComboBoxItem Content="Move to" />
                                     <ComboBoxItem Content="Copy to" />
                                 </ComboBox>
 
-                                <Button Grid.Column="1"
+                                <Button Grid.Row="0" Grid.Column="2"
                                         Style="{StaticResource SecondaryButton}"
                                         Command="{Binding SelectDestinationCommand}"
-                                        Padding="8,4" Margin="0,0,6,0">
+                                        HorizontalAlignment="Left"
+                                        Padding="8,4" Margin="0,0,0,6"
+                                        ToolTip="{Binding DestinationFolder}">
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock Text="&#xE8B7;"
                                                    FontFamily="Segoe MDL2 Assets"
@@ -609,18 +706,45 @@
                                                    Margin="0,0,4,0" Foreground="{StaticResource WarningBrush}" />
                                         <TextBlock Text="{Binding DestinationDisplay}"
                                                    FontFamily="Segoe UI"
-                                                   FontSize="12" VerticalAlignment="Center" />
+                                                   FontSize="12" VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis" />
                                     </StackPanel>
                                 </Button>
 
-                                <TextBox Grid.Column="2"
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="Subfolders"
+                                           Foreground="{StaticResource SecondaryTextBrush}"
+                                           FontSize="12" VerticalAlignment="Center"
+                                           Margin="0,0,10,0" />
+
+                                <TextBox x:Name="SubfolderTemplate" Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"
                                          Text="{Binding DestinationSubfolderPattern, UpdateSourceTrigger=PropertyChanged}"
-                                         FontSize="11" Padding="6,4"
+                                         FontSize="12" Padding="6,4"
                                          Background="{StaticResource SecondaryBackgroundBrush}"
-                                         Foreground="{StaticResource SecondaryTextBrush}"
+                                         Foreground="{StaticResource PrimaryTextBrush}"
+                                         CaretBrush="{StaticResource PrimaryTextBrush}"
                                          BorderBrush="{StaticResource BorderBrush}"
                                          BorderThickness="1"
-                                         ToolTip="Template: #type #ext #year #month #date #datetaken #alpha #size (e.g. #type/#ext)" />
+                                         ToolTip="Template for files no rule matched: #type #ext #year #month #date #datetaken #alpha #size #prefix (e.g. #type/#ext). Overrides the method buttons." />
+
+                                <!-- Placeholder while the template is empty -->
+                                <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"
+                                           Text="By method above, or a template like #type/#ext"
+                                           IsHitTestVisible="False"
+                                           Foreground="{StaticResource SecondaryTextBrush}"
+                                           FontSize="12" Opacity="0.7"
+                                           TextTrimming="CharacterEllipsis"
+                                           VerticalAlignment="Center" Margin="9,0,4,0">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Text, ElementName=SubfolderTemplate}" Value="">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
                             </Grid>
                         </StackPanel>
                     </ScrollViewer>
