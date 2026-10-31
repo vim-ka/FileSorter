@@ -18,3 +18,7 @@ Gap analysis vs. Easy File Organizer (Qiplex). New logic goes into `FileSorter.C
 - [ ] **8. Click on a donut chart segment** shows only that group
 - [ ] **9. Localization** (at least RU/EN)
 - [ ] **10. Cross-platform** — macOS/Linux UI on Avalonia on top of `FileSorter.Core`; macOS thumbnails via QuickLook; signing/notarization
+- [ ] **11. Rename while organizing** — not in Easy File Organizer (Qiplex sells renaming as a separate Smart File Renamer). A "File name" template in the Destination block, under Subfolders:
+  - tokens: `#name` (original name), `#date` / `#datetaken`, `#n` (counter within the target folder), `#folder` (source folder name), plus `#type` `#ext` `#year` `#month`; e.g. `#datetaken_#n` → `2026-10-15_001.jpg`
+  - empty = keep the name; the preview shows the new names; undo restores place and name (history already stores full old/new paths)
+  - to decide: name clashes (append `(2)` vs. always number); a per-rule name template or one per folder
