@@ -10,7 +10,8 @@ public sealed record PreviewResult(
     IReadOnlyList<PreviewItem> Roots,
     IReadOnlyList<CategoryStats> Stats,
     IReadOnlyList<ViewFileGroup> ViewGroups,
-    int FileCount);
+    int FileCount,
+    int GroupCount);
 
 /// <summary>
 /// Builds the preview tree, chart stats and view groups for one or several folders.
@@ -18,6 +19,13 @@ public sealed record PreviewResult(
 /// </summary>
 public static class PreviewBuilder
 {
+    /// <summary>
+    /// Most entries the chart and its (non-virtualized) legend get: grouping by name can yield
+    /// thousands of groups, which froze the UI for minutes. The largest groups are kept, the rest
+    /// summed into one "+N more" entry.
+    /// </summary>
+    public const int MaxStatsGroups = 12;
+
     /// <summary>
     /// One source: a single "Destination → X" root; ByType without a template shows every category
     /// (filtered-out ones as unselected). Several: a "{FolderName} → X" root per folder; stats are
@@ -74,7 +82,7 @@ public static class PreviewBuilder
             ? ByTypeStats(sources[0], roots[0], total, colors)
             : GroupStats(groupOrder.Select(n => (n, groupCounts[n])), total, colors);
 
-        return new PreviewResult(roots, stats, viewGroups, total);
+        return new PreviewResult(roots, stats, viewGroups, total, groupOrder.Count);
     }
 
     private static string DestinationDisplay(OrganizeRequest request) =>
@@ -126,10 +134,23 @@ public static class PreviewBuilder
     private static List<CategoryStats> GroupStats(IEnumerable<(string Name, int Count)> groups, int total,
         IReadOnlyList<RgbColor> colors)
     {
+        var all = groups.ToList();
+        var shown = all;
+        int restGroups = 0, restCount = 0;
+        if (all.Count > MaxStatsGroups)
+        {
+            var bySize = all.OrderByDescending(g => g.Count).ThenBy(g => g.Name).ToList();
+            shown = bySize.Take(MaxStatsGroups - 1).ToList();
+            restGroups = bySize.Count - shown.Count;
+            restCount = bySize.Skip(shown.Count).Sum(g => g.Count);
+        }
+
         var stats = new List<CategoryStats>();
         double angle = 0;
         int colorIndex = 0;
-        foreach (var (name, count) in groups.OrderBy(g => g.Name))
+        var entries = shown.OrderBy(g => g.Name).ToList();
+        if (restGroups > 0) entries.Add(($"+{restGroups} more", restCount));
+        foreach (var (name, count) in entries)
         {
             double pct = total > 0 ? (double)count / total : 0;
             double sweep = pct * 360;

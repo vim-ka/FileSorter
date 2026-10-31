@@ -84,6 +84,29 @@ public class MultiFolderTests : TempDataDirTest
     }
 
     [Fact]
+    public void Build_ManyGroups_StatsKeepLargestAndSumTheRest()
+    {
+        // 41 groups: BIG with 10 files, then 40 single-file extensions
+        var files = Enumerable.Range(0, 10).Select(i => TestData.Item($@"C:\dl\big{i}.big"))
+            .Concat(Enumerable.Range(0, 40).Select(i => TestData.Item($@"C:\dl\f{i}.e{i:D2}")))
+            .ToList();
+        var sources = new List<PreviewSource> { new("Downloads", Request(@"C:\dl", OrganizeMethod.ByExtension), files) };
+
+        var result = PreviewBuilder.Build(sources, Colors, _ => null);
+
+        Assert.Equal(41, result.GroupCount);
+        Assert.Equal(PreviewBuilder.MaxStatsGroups, result.Stats.Count);
+        Assert.Contains(result.Stats, s => s.Name == "BIG" && s.Count == 10);
+        var rest = result.Stats[^1];
+        int hidden = 41 - (PreviewBuilder.MaxStatsGroups - 1);
+        Assert.Equal($"+{hidden} more", rest.Name);
+        Assert.Equal(hidden, rest.Count);
+        Assert.Equal(50, result.Stats.Sum(s => s.Count));
+        Assert.Equal(360, result.Stats.Sum(s => s.SweepAngle), 3);
+        Assert.Equal(41, result.ViewGroups.Count);
+    }
+
+    [Fact]
     public void Build_OneSource_KeepsDestinationRootAndByTypeStats()
     {
         var sources = new List<PreviewSource>

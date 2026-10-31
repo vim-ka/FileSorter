@@ -264,16 +264,20 @@ public partial class MainViewModel : ObservableObject
 
     /// <summary>"RULES ON" while at least one rule is effective (enabled, complete, with a destination).</summary>
     public string RulesActiveText => _profile.Rules.Any(r => r.Snapshot() != null) ? "RULES ON" : "";
+
+    /// <summary>Groups in the last preview; the chart shows at most <see cref="PreviewBuilder.MaxStatsGroups"/>.</summary>
+    private int _groupCount;
+
     public string TypeCountText => SelectedMethod switch
     {
         OrganizeMethod.ByType => $"{CategoryStatsItems.Count} Types",
-        OrganizeMethod.ByExtension => $"{CategoryStatsItems.Count} Extensions",
-        OrganizeMethod.ByDate => $"{CategoryStatsItems.Count} Dates",
-        OrganizeMethod.ByAlphabet => $"{CategoryStatsItems.Count} Letters",
-        OrganizeMethod.BySize => $"{CategoryStatsItems.Count} Sizes",
-        OrganizeMethod.ByDateTaken => $"{CategoryStatsItems.Count} Dates",
-        OrganizeMethod.ByName => $"{CategoryStatsItems.Count} Names",
-        _ => $"{CategoryStatsItems.Count} Groups"
+        OrganizeMethod.ByExtension => $"{_groupCount} Extensions",
+        OrganizeMethod.ByDate => $"{_groupCount} Dates",
+        OrganizeMethod.ByAlphabet => $"{_groupCount} Letters",
+        OrganizeMethod.BySize => $"{_groupCount} Sizes",
+        OrganizeMethod.ByDateTaken => $"{_groupCount} Dates",
+        OrganizeMethod.ByName => $"{_groupCount} Names",
+        _ => $"{_groupCount} Groups"
     };
 
     public bool CanUndo => _organizer.LastUndoableRun.Count > 0;
@@ -972,6 +976,7 @@ public partial class MainViewModel : ObservableObject
             _thumbnails.CancelPending();
             PreviewItems.Clear();
             CategoryStatsItems.Clear();
+            _groupCount = 0;
             ViewFileGroups.Clear();
             RebuildFlatViewItems();
             return;
@@ -1012,6 +1017,7 @@ public partial class MainViewModel : ObservableObject
         // Build flat list for virtualized ListBox; thumbnails load lazily for visible rows
         RebuildFlatViewItems();
 
+        _groupCount = result.GroupCount;
         TotalFiles = result.FileCount;
         OnPropertyChanged(nameof(TypeCountText));
         OnPropertyChanged(nameof(RulesActiveText));
