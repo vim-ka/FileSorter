@@ -10,6 +10,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        Platform.MaximizeToWorkArea.Attach(this);
         // Settings are saved and auto-organize stopped by App.ExitApplication/OnExit
         // (MainViewModel.Shutdown), so closing the old window on a theme switch doesn't touch the
         // shared view model.
