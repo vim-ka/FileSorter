@@ -1014,8 +1014,11 @@ public partial class MainViewModel : ObservableObject
             ViewFileGroups.Add(vg);
         }
 
-        // Build flat list for virtualized ListBox; thumbnails load lazily for visible rows
-        RebuildFlatViewItems();
+        // Build flat list for virtualized ListBox; thumbnails load lazily for visible rows.
+        // Replacing it recreates every visible row (hundreds of ms of layout), so while scanning
+        // it is rebuilt at most every FlatListScanInterval; the refresh after the scan always does.
+        if (!IsScanning || DateTime.UtcNow - _lastFlatRebuild >= FlatListScanInterval)
+            RebuildFlatViewItems();
 
         _groupCount = result.GroupCount;
         TotalFiles = result.FileCount;
@@ -1255,8 +1258,14 @@ public partial class MainViewModel : ObservableObject
             group.IsExpanded = expanded;
     }
 
+    /// <summary>Least time between file list rebuilds while a scan is running.</summary>
+    internal static TimeSpan FlatListScanInterval { get; set; } = TimeSpan.FromSeconds(2);
+
+    private DateTime _lastFlatRebuild;
+
     private void RebuildFlatViewItems()
     {
+        _lastFlatRebuild = DateTime.UtcNow;
         var flat = new List<ViewFileItem>();
         foreach (var vg in ViewFileGroups)
         {

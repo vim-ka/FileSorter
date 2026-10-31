@@ -65,6 +65,37 @@ public class ScanTests : TempDataDirTest
     }
 
     [Fact]
+    public async Task FileList_DuringScan_IsNotRebuiltWithinTheInterval_AndIsCompleteAfterIt()
+    {
+        var dir = TestData.NewTempDir("big");
+        for (int i = 0; i < 120; i++) TestData.WriteFile(dir, $"f{i}.txt"); // 3 batches of 50
+        var saved = MainViewModel.FlatListScanInterval;
+        MainViewModel.FlatListScanInterval = TimeSpan.FromHours(1);
+        try
+        {
+            var dispatcher = new QueuedDispatcher();
+            var dialogs = new FakeDialogs();
+            var vm = NewVm(dispatcher, dialogs);
+            int Files() => vm.FlatViewItems.Count(f => !f.IsHeader);
+
+            AddFolder(vm, dialogs, dir);
+            await dispatcher.RunOneAsync();
+            await WaitUntilAsync(() => Files() == 50); // the first refresh of a scan shows the list
+
+            await dispatcher.RunOneAsync();
+            await WaitUntilAsync(() => vm.StatusText.StartsWith("100 of 100"));
+            Assert.Equal(50, Files()); // the preview refreshed, the file list didn't
+
+            await dispatcher.RunOneAsync();
+            await WaitUntilAsync(() => !vm.IsScanning && Files() == 120);
+        }
+        finally
+        {
+            MainViewModel.FlatListScanInterval = saved;
+        }
+    }
+
+    [Fact]
     public async Task OrganizeResultMessage_SurvivesTheRescanThatFollows()
     {
         var dir = TestData.NewTempDir("status");
