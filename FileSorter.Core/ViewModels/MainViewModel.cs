@@ -566,6 +566,13 @@ public partial class MainViewModel : ObservableObject
     private void OnFolderPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName != nameof(FolderViewModel.IsChecked)) return;
+        // With nothing selected the options would edit a throwaway profile: the checked folder
+        // becomes the selected one, so they apply to it (SelectFolder rescans the targets)
+        if (_selectedFolder == null && !IsOrganizing && sender is FolderViewModel { IsChecked: true } folder)
+        {
+            SelectFolder(folder);
+            return;
+        }
         OnTargetsChanged();
         // A running organize works on what it captured; the rescan after it picks up the change
         if (!IsOrganizing)

@@ -221,6 +221,35 @@ public class MainViewModelProfileTests : TempDataDirTest
         Assert.Empty(NewVm().Folders);
     });
 
+    [Fact]
+    public Task CheckFolder_WithNothingSelected_SelectsItSoMethodEditsApplyToIt() => _host.Run(() =>
+    {
+        var path = TestData.NewTempDir("A");
+        var first = NewVm();
+        AddFolder(first, path);
+        first.SaveSettings();
+        var vm = NewVm();
+        var a = Find(vm, path);
+        Assert.Null(vm.SelectedFolder);
+
+        a.IsChecked = true;
+        Assert.Same(a, vm.SelectedFolder);
+
+        vm.SetMethodCommand.Execute(OrganizeMethod.ByExtension);
+        Assert.Equal(OrganizeMethod.ByExtension, a.Profile.Method);
+    });
+
+    [Fact]
+    public Task CheckFolder_WithAnotherSelected_KeepsTheSelection() => _host.Run(() =>
+    {
+        var vm = NewVm();
+        var a = AddFolder(vm, TestData.NewTempDir("A"));
+        var b = AddFolder(vm, TestData.NewTempDir("B"));
+
+        a.IsChecked = true;
+        Assert.Same(b, vm.SelectedFolder);
+    });
+
     [Theory]
     [InlineData(false, false, AutoStatus.Off)]
     [InlineData(true, false, AutoStatus.On)]
