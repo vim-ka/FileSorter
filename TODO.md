@@ -22,3 +22,4 @@ Gap analysis vs. Easy File Organizer (Qiplex). New logic goes into `FileSorter.C
   - tokens: `#name` (original name), `#date` / `#datetaken`, `#n` (counter within the target folder), `#folder` (source folder name), plus `#type` `#ext` `#year` `#month`; e.g. `#datetaken_#n` → `2026-10-15_001.jpg`
   - empty = keep the name; the preview shows the new names; undo restores place and name (history already stores full old/new paths)
   - to decide: name clashes (append `(2)` vs. always number); a per-rule name template or one per folder
+- [ ] **12. Redesign the Auto-organize block** — today it's a bare header with an unlabeled checkbox on the right plus "Start with Windows"; looks unfinished. Study how Easy File Organizer lays out its auto-organize/schedule settings (toggle switch, labeled mode "on new files / on schedule", interval, status) and rework ours to match the new Rules/Destination card style
